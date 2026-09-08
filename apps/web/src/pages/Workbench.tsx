@@ -13,6 +13,9 @@ import {
   approvalSubmissionAllowed,
   applyTaskHistoryPreferences,
   executionFailureAllowsAction,
+  formatElapsedTime,
+  formatLocalDateTime,
+  historyTaskPresentation,
   mergeTaskHistory,
   type HistoryTaskSummary,
 } from '../current-flow-state.ts';
@@ -104,6 +107,9 @@ export function Workbench({ user, capabilities, onLogout }: { user: User; capabi
   useEffect(() => {
     if (stateVersion != null) refreshHistory();
   }, [refreshHistory, stateVersion]);
+  const currentHistoryTask = currentTaskId
+    ? history.find((task) => task.kind === 'current' && task.id === currentTaskId)
+    : undefined;
 
   function newTask() {
     setView('task'); setDetail(null); setDetailError('');
@@ -177,7 +183,10 @@ export function Workbench({ user, capabilities, onLogout }: { user: User; capabi
               <Loading text="正在读取任务状态…" />
             ) : (
               <>
-                {originalInput ? <UserBubble text={originalInput} /> : null}
+                {originalInput ? (
+                  <UserBubble text={originalInput} createdAt={currentHistoryTask?.created_at} />
+                ) : null}
+                {currentHistoryTask ? <TaskTimeSummary task={currentHistoryTask} /> : null}
 
                 {clarification && phase === 'clarifying' && (
                   <>
@@ -385,11 +394,27 @@ function Welcome({ onPick }: { onPick: (t: string) => void }) {
   );
 }
 
-function UserBubble({ text }: { text: string }) {
+function TaskTimeSummary({ task }: { task: HistoryTaskSummary }) {
+  const presentation = historyTaskPresentation(task);
+  const terminal = presentation.group === 'completed' || presentation.group === 'failed';
+  const endedAt = task.updated_at ?? task.created_at;
+  return (
+    <div className="task-time-summary" aria-label="任务时间">
+      <span>开始于 {formatLocalDateTime(task.created_at)}</span>
+      <span>{terminal ? '完成于' : '最近更新于'} {formatLocalDateTime(endedAt)}</span>
+      {terminal ? <span>总用时 {formatElapsedTime(task.created_at, endedAt)}</span> : null}
+    </div>
+  );
+}
+
+function UserBubble({ text, createdAt }: { text: string; createdAt?: string }) {
   if (!text) return null;
   return (
     <div className="user-row">
-      <div className="user-bubble">{text}</div>
+      <div className="user-bubble">
+        <div>{text}</div>
+        {createdAt ? <time dateTime={createdAt}>{formatLocalDateTime(createdAt)}</time> : null}
+      </div>
     </div>
   );
 }

@@ -152,6 +152,8 @@ interface CurrentFlowStateModule {
     group: 'pending' | 'running' | 'completed' | 'failed';
     tone: 'action' | 'running' | 'success' | 'warning' | 'danger' | 'muted';
   };
+  formatLocalDateTime(value: string | undefined): string;
+  formatElapsedTime(start: string | undefined, end: string | undefined): string;
   applyTaskHistoryPreferences(
     tasks: HistoryTask[],
     preferences: TaskHistoryPreference[],
@@ -353,6 +355,19 @@ test('every Current workflow state has an explicit history label and group', asy
     expected,
   );
   assert.throws(() => taskStatePresentation('unknown_state'), /unknown|unsupported|state/i);
+});
+
+test('formats local task timestamps and stable elapsed durations', async () => {
+  const { formatElapsedTime, formatLocalDateTime } = await loadCurrentFlowStateModule();
+  assert.notEqual(formatLocalDateTime('2026-09-07T08:05:00.000Z'), '时间未知');
+  assert.equal(formatElapsedTime(
+    '2026-09-07T08:05:00.000Z',
+    '2026-09-07T10:12:00.000Z',
+  ), '2 小时 7 分钟');
+  assert.equal(formatElapsedTime(
+    '2026-09-07T08:05:00.000Z',
+    '2026-09-07T08:05:30.000Z',
+  ), '不足 1 分钟');
 });
 
 test('history preferences pin, rename and hide tasks without mutating their source identity', async () => {

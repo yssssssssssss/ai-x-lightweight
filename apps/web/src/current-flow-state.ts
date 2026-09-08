@@ -142,6 +142,36 @@ function timestamp(value: string | undefined): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+const LOCAL_TIME_FORMAT = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+export function formatLocalDateTime(value: string | undefined): string {
+  const milliseconds = timestamp(value);
+  return milliseconds === 0 ? '时间未知' : LOCAL_TIME_FORMAT.format(new Date(milliseconds));
+}
+
+export function formatElapsedTime(start: string | undefined, end: string | undefined): string {
+  const startedAt = timestamp(start);
+  const endedAt = timestamp(end);
+  if (startedAt === 0 || endedAt < startedAt) return '用时未知';
+  const elapsed = endedAt - startedAt;
+  if (elapsed < 60_000) return '不足 1 分钟';
+  const totalMinutes = Math.floor(elapsed / 60_000);
+  if (totalMinutes < 60) return `${totalMinutes} 分钟`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours < 24) return minutes === 0 ? `${hours} 小时` : `${hours} 小时 ${minutes} 分钟`;
+  const days = Math.floor(hours / 24);
+  const remainingHours = hours % 24;
+  return remainingHours === 0 ? `${days} 天` : `${days} 天 ${remainingHours} 小时`;
+}
+
 export function applyTaskHistoryPreferences(
   tasks: HistoryTaskSummary[],
   preferences: TaskHistoryPreference[],

@@ -42,12 +42,13 @@ test('current conversation renders each user turn before assistant stages and is
 
   assert.match(
     timeline,
-    /phase === 'idle'\s*\?\s*\([\s\S]*?: phase === 'loading-task'\s*\?\s*\([\s\S]*?:\s*\(\s*<>\s*\{originalInput\s*\?\s*<UserBubble/u,
+    /phase === 'idle'\s*\?\s*\([\s\S]*?: phase === 'loading-task'\s*\?\s*\([\s\S]*?:\s*\(\s*<>\s*\{originalInput\s*\?\s*\(\s*<UserBubble/u,
     'idle, loading, and active conversation states must be mutually exclusive',
   );
 
-  const userTurn = timeline.indexOf('{originalInput ? <UserBubble');
+  const userTurn = timeline.indexOf('{originalInput ? (');
   assert.ok(userTurn >= 0, 'active conversation must render the submitted user input');
+  assert.ok(timeline.indexOf('<TaskTimeSummary', userTurn) > userTurn);
   for (const assistantTurn of [
     "{clarification && phase === 'clarifying'",
     '{candidatesResp && (',
@@ -64,6 +65,9 @@ test('current conversation renders each user turn before assistant stages and is
     'clarification submission must expose the live planning steps',
   );
 
+  assert.match(css, /\.task-time-summary/u);
+  assert.match(css, /\.user-bubble time/u);
+
   const chatColumnRule = css.match(/\.chat-column\s*\{[^}]*\}/u)?.[0] ?? '';
   assert.doesNotMatch(chatColumnRule, /column-reverse|direction:\s*rtl/u);
 });
@@ -79,6 +83,9 @@ test('sidebar exposes four status tabs and persistent item management actions', 
   const source = await readFile(sidebar, 'utf8');
 
   for (const label of ['待处理', '进行中', '已完成', '失败']) assert.match(source, new RegExp(label));
+  assert.match(source, /history-task-time/u);
+  assert.match(source, /完成于/u);
+  assert.match(source, /用时/u);
   assert.match(source, /role="tablist"/u);
   assert.match(source, /aria-haspopup="menu"/u);
   assert.match(source, /置顶/u);

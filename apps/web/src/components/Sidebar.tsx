@@ -5,6 +5,8 @@ import type {
   User,
 } from '../api/client.ts';
 import {
+  formatElapsedTime,
+  formatLocalDateTime,
   historyTaskPresentation,
   type HistoryTaskSummary,
   type TaskHistoryGroup,
@@ -164,6 +166,16 @@ function HistoryTaskRow({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const presentation = historyTaskPresentation(task);
+  const terminal = presentation.group === 'completed' || presentation.group === 'failed';
+  const visibleTime = task.updated_at ?? task.created_at;
+  const timeLabel = visibleTime
+    ? terminal
+      ? `${presentation.group === 'completed' ? '完成于' : '结束于'} ${formatLocalDateTime(visibleTime)}`
+      : `更新于 ${formatLocalDateTime(visibleTime)}`
+    : null;
+  const elapsed = terminal && task.created_at && visibleTime
+    ? formatElapsedTime(task.created_at, visibleTime)
+    : null;
 
   useEffect(() => {
     if (mode === 'closed') return;
@@ -246,6 +258,11 @@ function HistoryTaskRow({
               <span aria-hidden="true">·</span>
               <span>{task.task_type ?? '未分类'}</span>
             </span>
+            {timeLabel ? (
+              <span className="history-task-time" title={timeLabel}>
+                {timeLabel}{elapsed ? ` · 用时 ${elapsed}` : ''}
+              </span>
+            ) : null}
           </button>
           <button
             ref={triggerRef}
