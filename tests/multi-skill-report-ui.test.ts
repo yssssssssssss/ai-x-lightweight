@@ -6,6 +6,7 @@ import type { FinalizedPlan } from '../packages/api-contract/http.ts';
 import { hasCompleteContributionSidecars } from '../apps/web/src/report-package-response.ts';
 import { multiSkillPlanViewModel } from '../apps/web/src/multi-skill-view-model.ts';
 import { groupExecutionSteps } from '../apps/web/src/execution-flow-graph.ts';
+import { taskIdFromLocationSearch } from '../apps/web/src/task-link.ts';
 
 function plan(): FinalizedPlan {
   return {
@@ -125,6 +126,13 @@ test('generic current-text packages retain the owner Contribution view decision'
   assert.equal(hasCompleteContributionSidecars({ contributionSummary: {} }), false);
 });
 
+test('report task links take precedence over stale local task restoration', () => {
+  const taskId = '25f05704-62f7-44ab-a6b3-421898bba909';
+  assert.equal(taskIdFromLocationSearch(`?report-fixed=${taskId}`), taskId);
+  assert.equal(taskIdFromLocationSearch(`?task=${taskId}`), taskId);
+  assert.equal(taskIdFromLocationSearch('?report-fixed=not-a-task'), null);
+});
+
 test('native Stage4 exposes final report and Skill result views with original and HTML downloads', async () => {
   const reportSource = await readFile(
     join(process.cwd(), 'apps/web/src/components/stages/NativeStage4Report.tsx'),
@@ -136,6 +144,9 @@ test('native Stage4 exposes final report and Skill result views with original an
   assert.match(reportSource, /controlFinalReportHtml/u);
   assert.match(reportSource, /controlVisualAsset/u);
   assert.match(reportSource, /controlFinalReportZip/u);
+  assert.match(reportSource, /HISTORICAL_FINAL_REPORT_VERSION/u);
+  assert.match(reportSource, /历史报告 · 只读/u);
+  assert.match(reportSource, /下载 Markdown/u);
   assert.match(reportSource, /下载离线报告/u);
   assert.match(reportSource, /下载原始报告/u);
   assert.match(reportSource, /下载 HTML/u);

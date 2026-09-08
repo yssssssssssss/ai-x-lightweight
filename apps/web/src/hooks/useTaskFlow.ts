@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
-  NativeFinalReport,
   ReadableExecutionPlan,
   NativeSkillResult,
 } from '../../../../packages/api-contract/native-skill-orchestration.ts';
+import type { ControlFinalReport } from '../../../../packages/api-contract/historical-final-report.ts';
 import {
   api,
   type ClarificationRequiredResponse,
@@ -38,6 +38,7 @@ import {
   type ExecutionPlanStepView,
   type ReportState,
 } from '../current-flow-state.ts';
+import { taskIdFromLocationSearch } from '../task-link.ts';
 
 const CURRENT_TASK_STORAGE_KEY = 'ur_current_task_id';
 
@@ -153,7 +154,7 @@ export function useTaskFlow() {
   const [exec, setExec] = useState<ControlExecutionResult | null>(null);
   const [executionSteps, setExecutionSteps] = useState<ExecLogRow[]>([]);
   const [executionPlanSteps, setExecutionPlanSteps] = useState<ExecutionPlanStepView[]>([]);
-  const [finalReport, setFinalReport] = useState<NativeFinalReport | null>(null);
+  const [finalReport, setFinalReport] = useState<ControlFinalReport | null>(null);
   const [skillResults, setSkillResults] = useState<NativeSkillResult[]>([]);
   const [reportState, setReportState] = useState<ReportState>('idle');
   const [deliverableError, setDeliverableError] = useState('');
@@ -296,7 +297,8 @@ export function useTaskFlow() {
   }, [applyCurrentTask]);
 
   useEffect(() => {
-    const taskId = localStorage.getItem(CURRENT_TASK_STORAGE_KEY);
+    const taskId = taskIdFromLocationSearch(window.location.search)
+      ?? localStorage.getItem(CURRENT_TASK_STORAGE_KEY);
     if (taskId) void restoreTask(taskId);
   }, [restoreTask]);
 

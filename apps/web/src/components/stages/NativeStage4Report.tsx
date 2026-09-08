@@ -3,6 +3,10 @@ import type {
   NativeFinalReport,
   NativeSkillResult,
 } from '../../../../../packages/api-contract/native-skill-orchestration.ts';
+import {
+  HISTORICAL_FINAL_REPORT_VERSION,
+  type ControlFinalReport,
+} from '../../../../../packages/api-contract/historical-final-report.ts';
 import { api } from '../../api/client.ts';
 import { Header } from './Stage1Understand.tsx';
 
@@ -12,9 +16,12 @@ export function NativeStage4Report({
   skillResults,
 }: {
   taskId: string;
-  finalReport: NativeFinalReport;
+  finalReport: ControlFinalReport;
   skillResults: NativeSkillResult[];
 }) {
+  const historical = finalReport.version === HISTORICAL_FINAL_REPORT_VERSION;
+  const nativeReport: NativeFinalReport | null = historical ? null : finalReport;
+  const hasSkillDetails = !historical && skillResults.length > 0;
   const [view, setView] = useState<'final' | 'skills'>('final');
   const [selectedInvocationId, setSelectedInvocationId] = useState(
     skillResults[0]?.invocationId ?? '',
@@ -26,6 +33,10 @@ export function NativeStage4Report({
   const statusLabel = (status: NativeSkillResult['status']) => status === 'completed'
     ? '已完成'
     : status === 'completed_with_gaps' ? '已完成，存在资料缺口' : '需要补充资料';
+
+  useEffect(() => {
+    if (!hasSkillDetails) setView('final');
+  }, [hasSkillDetails]);
 
   useEffect(() => {
     let active = true;
@@ -70,34 +81,52 @@ export function NativeStage4Report({
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  const primaryContent = historical ? finalReport.markdown : finalReport.primary.content;
+
   return (
     <section className="stage-card native-report" aria-label="研究报告">
       <Header
         n="4"
         title={finalReport.title}
-        note={finalReport.mode === 'multi_skill' ? '多项能力综合报告' : '单项能力报告'}
+        note={historical
+          ? '历史报告 · 只读'
+          : finalReport.mode === 'multi_skill' ? '多项能力综合报告' : '单项能力报告'}
       />
-      <nav className="report-view-toggle" aria-label="报告视图">
-        <button type="button" className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终报告</button>
-        <button type="button" className={view === 'skills' ? 'is-active' : ''} onClick={() => setView('skills')}>分析明细</button>
-      </nav>
+      {historical ? (
+        <p role="status">该报告由历史 Lightweight 合同生成，仅支持查看和下载。</p>
+      ) : null}
+      {hasSkillDetails ? (
+        <nav className="report-view-toggle" aria-label="报告视图">
+          <button type="button" className={view === 'final' ? 'is-active' : ''} onClick={() => setView('final')}>最终报告</button>
+          <button type="button" className={view === 'skills' ? 'is-active' : ''} onClick={() => setView('skills')}>分析明细</button>
+        </nav>
+      ) : null}
       {view === 'final' ? (
         <>
           <div className="report-actions">
-            {!finalReport.reportDocument ? (
+            {historical ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => download(`研究报告-${taskId}.md`, finalReport.markdown, 'text/markdown;charset=utf-8')}
+              >
+                下载 Markdown
+              </button>
+            ) : null}
+            {nativeReport && !nativeReport.reportDocument ? (
               <button
                 type="button"
                 className="btn-secondary"
                 onClick={() => download(
-                  `研究报告-${taskId}.${finalReport.primary.format === 'html' ? 'html' : 'md'}`,
-                  finalReport.primary.content,
-                  finalReport.primary.format === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8',
+                  `研究报告-${taskId}.${nativeReport.primary.format === 'html' ? 'html' : 'md'}`,
+                  nativeReport.primary.content,
+                  nativeReport.primary.format === 'html' ? 'text/html;charset=utf-8' : 'text/markdown;charset=utf-8',
                 )}
               >
                 下载原始报告
               </button>
             ) : null}
-            {html && !finalReport.reportDocument ? (
+            {html && (!nativeReport || !nativeReport.reportDocument) ? (
               <button
                 type="button"
                 className="btn-ghost"
@@ -106,7 +135,7 @@ export function NativeStage4Report({
                 下载 HTML
               </button>
             ) : null}
-            {finalReport.reportDocument ? (
+            {nativeReport?.reportDocument ? (
               <button
                 type="button"
                 className="btn-ghost"
@@ -121,7 +150,7 @@ export function NativeStage4Report({
                 下载离线报告
               </button>
             ) : null}
-            {finalReport.attachments.map((attachment, index) => (
+            {nativeReport?.attachments.map((attachment, index) => (
               <button
                 key={attachment.path}
                 type="button"
@@ -142,7 +171,13 @@ export function NativeStage4Report({
                 srcDoc={html}
               />
             )
-            : <pre className="native-report-content">{finalReport.primary.content}</pre>}
+            : <pre className="native-report-content">{primaryContent}</pre>}
+          {historical && finalReport.gaps.length > 0 ? (
+            <section>
+              <h3>资料缺口</h3>
+              <ul>{finalReport.gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul>
+            </section>
+          ) : null}
         </>
       ) : (
         <>

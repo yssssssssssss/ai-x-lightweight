@@ -20,6 +20,12 @@ import {
   type NativeFinalReport,
   type NativeSkillResult,
 } from '../../../packages/api-contract/native-skill-orchestration.ts';
+import {
+  HISTORICAL_FINAL_REPORT_VERSION,
+  parseHistoricalFinalReportV1,
+  type ControlFinalReport,
+  type HistoricalFinalReportV1,
+} from '../../../packages/api-contract/historical-final-report.ts';
 import { ControlArtifactStore } from '../../orchestrator-runtime/src/control/artifact-store.ts';
 import { ControlPlanningService } from '../../orchestrator-runtime/src/control/control-planning-service.ts';
 import { LeaseExecutionEngine } from '../../orchestrator-runtime/src/control/lease-execution-engine.ts';
@@ -533,7 +539,7 @@ export interface ControlRuntime {
   annotateVisualAsset(input: ImageAnnotationInput): Promise<ImageAnnotationResult>;
   getFinalReport(taskId: string, ownerUserId: string): Promise<{
     artifact: ControlArtifact;
-    report: NativeFinalReport;
+    report: ControlFinalReport;
   } | null>;
   getSkillResults(taskId: string, ownerUserId: string): Promise<NativeSkillResult[] | null>;
   readFinalReportHtml(input: {
@@ -944,6 +950,26 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
       || report.planVersionId !== binding.planVersionId
       || report.attemptId !== binding.attemptId
     ) throw new Error('NativeFinalReport binding is invalid');
+    return { artifact: stored.artifact, report };
+  };
+  const readHistoricalFinalReport = async (binding: {
+    taskId: string;
+    planVersionId: string;
+    attemptId: string;
+  }): Promise<{ artifact: ControlArtifact; report: HistoricalFinalReportV1 } | null> => {
+    const artifact = await fixedNativeArtifact(binding, {
+      kind: 'final_report',
+      schemaVersion: HISTORICAL_FINAL_REPORT_VERSION,
+      relativePath: 'reports/final-report.json',
+    });
+    if (!artifact) return null;
+    const stored = await artifacts.readVerifiedJson<unknown>(artifact.id);
+    const report = parseHistoricalFinalReportV1(stored.value);
+    if (
+      report.taskId !== binding.taskId
+      || report.planVersionId !== binding.planVersionId
+      || report.attemptId !== binding.attemptId
+    ) throw new Error('HistoricalFinalReportV1 binding is invalid');
     return { artifact: stored.artifact, report };
   };
   const readFrozenReportPackage = async (input: {
@@ -1535,15 +1561,25 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
         || !task.activePlanVersionId
         || !task.currentAttemptId
       ) return null;
-      return readNativeFinalReport({
+      const binding = {
         taskId: task.id,
         planVersionId: task.activePlanVersionId,
         attemptId: task.currentAttemptId,
-      });
+      };
+      const activePlan = await repository.getPlanVersionDetail(task.activePlanVersionId);
+      if (!activePlan) return null;
+      if (isNativeSkillExecutionPlanV1(activePlan.plan)) {
+        return readNativeFinalReport(binding);
+      }
+      if (revisionRecord(activePlan.plan)?.execution_contract_version === 'lightweight-execution-plan-v1') {
+        return readHistoricalFinalReport(binding);
+      }
+      return null;
     },
     async getSkillResults(taskId, ownerUserId) {
       const final = await this.getFinalReport(taskId, ownerUserId);
       if (!final) return null;
+      if (final.report.version === HISTORICAL_FINAL_REPORT_VERSION) return [];
       const artifactsForAttempt = await repository.listArtifactsForAttempt({
         taskId: final.report.taskId,
         planVersionId: final.report.planVersionId,
@@ -1572,13 +1608,16 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
     async readFinalReportHtml(input) {
       const final = await this.getFinalReport(input.taskId, input.ownerUserId);
       if (!final || final.report.attemptId !== input.attemptId) return null;
+      const schemaVersion = final.report.version === HISTORICAL_FINAL_REPORT_VERSION
+        ? HISTORICAL_FINAL_REPORT_VERSION
+        : NATIVE_FINAL_REPORT_VERSION;
       const artifact = await fixedNativeArtifact({
         taskId: final.report.taskId,
         planVersionId: final.report.planVersionId,
         attemptId: final.report.attemptId,
       }, {
         kind: 'final_report_html',
-        schemaVersion: NATIVE_FINAL_REPORT_VERSION,
+        schemaVersion,
         relativePath: 'reports/report.html',
       });
       if (!artifact) return null;
@@ -1586,7 +1625,11 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
     },
     async readFinalReportZip(input) {
       const final = await this.getFinalReport(input.taskId, input.ownerUserId);
-      if (!final?.report.reportDocument) return null;
+      if (
+        !final
+        || final.report.version !== NATIVE_FINAL_REPORT_VERSION
+        || !final.report.reportDocument
+      ) return null;
       const bundleAssets = [];
       for (const [index, assetId] of final.report.reportDocument.assetIds.entries()) {
         const asset = await readOwnedVisualAsset({

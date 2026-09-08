@@ -173,6 +173,10 @@ export type {
   NativeFinalReport,
   NativeSkillResult,
 } from '../../../../packages/api-contract/native-skill-orchestration.ts';
+export type {
+  ControlFinalReport,
+  HistoricalFinalReportV1,
+} from '../../../../packages/api-contract/historical-final-report.ts';
 export type { ClarificationRequiredResponse, CurrentPlanningResponse } from '../../../agent-api/src/routes/control-planning.ts';
 export type {
   SystemCapabilitiesResponse,
@@ -201,9 +205,9 @@ import type {
   SelectControlPlanResponse,
 } from '../../../../packages/api-contract/control-workflow.ts';
 import type {
-  NativeFinalReport,
   NativeSkillResult,
 } from '../../../../packages/api-contract/native-skill-orchestration.ts';
+import type { ControlFinalReport } from '../../../../packages/api-contract/historical-final-report.ts';
 import type { PlanProgress } from '../../../../packages/api-contract/plan.ts';
 import type { VisualAssetManifest } from '../../../../packages/api-contract/research-deliverable.ts';
 import type { SystemCapabilitiesResponse } from '../../../../packages/api-contract/system-capabilities.ts';
@@ -494,7 +498,7 @@ export const api = {
     return { blob: await response.blob() };
   },
   controlFinalReport: (taskId: string) =>
-    req<NativeFinalReport>(`/control-tasks/${encodeURIComponent(taskId)}/final-report`),
+    req<ControlFinalReport>(`/control-tasks/${encodeURIComponent(taskId)}/final-report`),
   controlSkillResults: (taskId: string) =>
     req<{ results: NativeSkillResult[] }>(`/control-tasks/${encodeURIComponent(taskId)}/skill-results`),
   controlFinalReportHtml: async (taskId: string): Promise<ControlHtmlBundleResponse> => {

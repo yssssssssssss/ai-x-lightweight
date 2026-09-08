@@ -19,6 +19,10 @@ import {
   parseNativeSkillResult,
   type NativeSkillRunSpec,
 } from '../packages/api-contract/native-skill-orchestration.ts';
+import {
+  HISTORICAL_FINAL_REPORT_VERSION,
+  parseHistoricalFinalReportV1,
+} from '../packages/api-contract/historical-final-report.ts';
 import { MockLLMClient } from '../apps/orchestrator-runtime/src/runtime/llm-client.ts';
 import { SchemaValidator } from '../apps/orchestrator-runtime/src/schema/validator.ts';
 
@@ -100,6 +104,36 @@ test('freezes strict native package, result, and final-report contracts', () => 
     }],
   });
   assert.equal(final.skillResults.length, 1);
+});
+
+test('parses the historical final report as a distinct read-only contract', () => {
+  const report = parseHistoricalFinalReportV1({
+    version: HISTORICAL_FINAL_REPORT_VERSION,
+    taskId: 'task-1',
+    planVersionId: 'plan-1',
+    attemptId: 'attempt-1',
+    mode: 'single_skill',
+    title: 'Historical report',
+    markdown: '# Historical report',
+    sources: [source],
+    gaps: [],
+    skillReports: [{
+      skillId: 'native-test',
+      invocationId: 'inv-native',
+      status: 'completed',
+      path: 'skill-results/inv-native.json',
+    }],
+  });
+  assert.equal(report.version, HISTORICAL_FINAL_REPORT_VERSION);
+  assert.equal(report.markdown, '# Historical report');
+  assert.throws(() => parseHistoricalFinalReportV1({
+    ...report,
+    sources: [{ ...source, url: 'http://example.com/source' }],
+  }), /sources\[0\]\.url/u);
+  assert.throws(() => parseHistoricalFinalReportV1({
+    ...report,
+    skillReports: [{ ...report.skillReports[0], path: '../report.json' }],
+  }), /skillReports\[0\]\.path/u);
 });
 
 test('rejects native output and attachment hash drift', () => {

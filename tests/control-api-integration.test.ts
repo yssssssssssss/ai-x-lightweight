@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter, once } from 'node:events';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,6 +52,7 @@ import type {
   ControlWorkflowState,
   CurrentTaskReadResponse,
 } from '../packages/api-contract/control-workflow.ts';
+import { HISTORICAL_FINAL_REPORT_VERSION } from '../packages/api-contract/historical-final-report.ts';
 
 interface ConversationAdapter {
   create(input: { ownerUserId: string; title: string }): Promise<{ id: string }>;
@@ -1370,6 +1371,176 @@ test('owner can download a generated native report ZIP', async () => {
     assert.equal(response.status, 200, await response.clone().text());
     assert.equal(response.headers.get('content-type'), 'application/zip');
     assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [0x50, 0x4b, 0x03, 0x04]);
+  } finally {
+    await closeLocalServer(local.server);
+  }
+});
+
+test('production runtime serves a sealed historical Lightweight report read-only', async () => {
+  const { buildControlRuntime } = await loadControlRuntimeModule();
+  const task = await repository.createTask({
+    conversationId,
+    ownerUserId,
+    originalInput: 'historical report route',
+    taskType: 'research_synthesis',
+    structuredTask: { research_goal: '读取历史报告' },
+    state: 'completed_with_gaps',
+    orchestrationMode: 'single_skill',
+  });
+  const historicalPlan = {
+    task_id: task.id,
+    execution_contract_version: 'lightweight-execution-plan-v1',
+    mode: 'single_skill',
+    steps: [],
+  };
+  const plan = await repository.createPlanVersion({
+    taskId: task.id,
+    version: 1,
+    candidateId: 'speed',
+    plan: historicalPlan,
+    planHash: `sha256:${createHash('sha256').update(JSON.stringify(historicalPlan)).digest('hex')}`,
+    pendingInputs: [],
+  });
+  const attemptId = randomUUID();
+  const connection = await scopedDatabase.connect();
+  try {
+    await connection.query(
+      `INSERT INTO control_execution_attempts
+         (id, task_id, plan_version_id, attempt_no, state, started_at, finished_at)
+       VALUES ($1, $2, $3, 1, 'completed', now(), now())`,
+      [attemptId, task.id, plan.id],
+    );
+    await connection.query(
+      `UPDATE control_tasks
+       SET active_plan_version_id = $2, current_attempt_id = $3, updated_at = now()
+       WHERE id = $1`,
+      [task.id, plan.id, attemptId],
+    );
+  } finally {
+    connection.release();
+  }
+
+  const report = {
+    version: HISTORICAL_FINAL_REPORT_VERSION,
+    taskId: task.id,
+    planVersionId: plan.id,
+    attemptId,
+    mode: 'single_skill' as const,
+    title: '历史研究报告',
+    markdown: '# 历史研究报告\n\n保留来源 [S-1]。',
+    sources: [{ id: 'S-1', title: '历史来源', type: 'tool_result' as const, url: evidenceUrl }],
+    gaps: ['缺少历史截图'],
+    skillReports: [{
+      skillId: 'competitive-web-research',
+      invocationId: 'invocation:competitive-web-research',
+      status: 'completed_with_gaps' as const,
+      path: 'skill-results/invocation%3Acompetitive-web-research.json',
+    }],
+  };
+  const reportJson = `${JSON.stringify(report, null, 2)}\n`;
+  const reportHtml = '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"></head><body><h1>历史研究报告</h1></body></html>';
+  const reportDirectory = join(artifactRoot, 'tasks', task.id, 'attempts', attemptId, 'reports');
+  mkdirSync(reportDirectory, { recursive: true });
+  const reportJsonPath = join(reportDirectory, 'final-report.json');
+  const reportHtmlPath = join(reportDirectory, 'report.html');
+  writeFileSync(reportJsonPath, reportJson);
+  writeFileSync(reportHtmlPath, reportHtml);
+  const historicalArtifacts = [
+    {
+      id: randomUUID(),
+      kind: 'final_report',
+      path: reportJsonPath,
+      bytes: Buffer.from(reportJson),
+    },
+    {
+      id: randomUUID(),
+      kind: 'final_report_html',
+      path: reportHtmlPath,
+      bytes: Buffer.from(reportHtml),
+    },
+  ];
+  const artifactConnection = await scopedDatabase.connect();
+  try {
+    for (const artifact of historicalArtifacts) {
+      await artifactConnection.query(
+        `INSERT INTO control_artifacts
+           (id, task_id, plan_version_id, attempt_id, kind, contract_version,
+            schema_version, state, storage_uri, content_sha256, byte_size, media_type,
+            sensitivity, redaction_policy_version, redaction_status, sealed_at)
+         VALUES ($1, $2, $3, $4, $5, 'trusted-p0-v1', $6, 'SEALED', $7, $8, $9, $10,
+                 'internal', 'v1', 'sealed', now())`,
+        [
+          artifact.id,
+          task.id,
+          plan.id,
+          attemptId,
+          artifact.kind,
+          HISTORICAL_FINAL_REPORT_VERSION,
+          artifact.path,
+          `sha256:${createHash('sha256').update(artifact.bytes).digest('hex')}`,
+          artifact.bytes.byteLength,
+          artifact.kind === 'final_report_html' ? 'text/html; charset=utf-8' : 'application/json',
+        ],
+      );
+    }
+  } finally {
+    artifactConnection.release();
+  }
+
+  const artifacts = new ControlArtifactStore({ root: artifactRoot, registry: repository });
+
+  const runtime = buildControlRuntime({
+    repository,
+    conversations: conversationAdapter(),
+    tools: new ToolRouter(),
+    llm: new OfflineEligibleRealLLM(),
+    validator: new SchemaValidator(),
+    skillLoader: new SkillLoader(),
+    artifacts,
+  }) as unknown as ControlTasksRuntime;
+  const directReport = await runtime.getFinalReport?.(task.id, ownerUserId);
+  assert.equal(directReport?.report.version, HISTORICAL_FINAL_REPORT_VERSION);
+  const directHtml = await runtime.readFinalReportHtml?.({
+    taskId: task.id,
+    attemptId,
+    ownerUserId,
+  });
+  assert.match(directHtml ?? '', /历史研究报告/u);
+  const local = await listenLocalApp(controlTasksApp(runtime));
+  const ownerToken = signToken({ userId: ownerUserId, email: 'owner@test.local' });
+  const foreignToken = signToken({ userId: foreignUserId, email: 'foreign@test.local' });
+  try {
+    const finalResponse = await fetch(`${local.baseUrl}/api/control-tasks/${task.id}/final-report`, {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    assert.equal(finalResponse.status, 200, await finalResponse.clone().text());
+    assert.deepEqual(await finalResponse.json(), report);
+
+    const htmlResponse = await fetch(`${local.baseUrl}/api/control-tasks/${task.id}/final-report.html`, {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    assert.equal(htmlResponse.status, 200, await htmlResponse.clone().text());
+    assert.match(await htmlResponse.text(), /历史研究报告/u);
+
+    const resultsResponse = await fetch(`${local.baseUrl}/api/control-tasks/${task.id}/skill-results`, {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    assert.equal(resultsResponse.status, 200, await resultsResponse.clone().text());
+    assert.deepEqual(await resultsResponse.json(), { results: [] });
+
+    const foreignResponse = await fetch(`${local.baseUrl}/api/control-tasks/${task.id}/final-report`, {
+      headers: { authorization: `Bearer ${foreignToken}` },
+    });
+    assert.equal(foreignResponse.status, 404);
+
+    writeFileSync(reportHtmlPath, `${reportHtml}\n<!-- tampered -->`);
+    const tamperedResponse = await fetch(`${local.baseUrl}/api/control-tasks/${task.id}/final-report.html`, {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    assert.equal(tamperedResponse.status, 500);
+    writeFileSync(reportHtmlPath, reportHtml);
+
+    assert.equal((await repository.listAttempts(task.id)).length, 1);
   } finally {
     await closeLocalServer(local.server);
   }

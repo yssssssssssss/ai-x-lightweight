@@ -8,9 +8,9 @@ import {
   type ResearchTaskV2,
 } from '../../../../packages/api-contract/plan.ts';
 import {
-  type NativeFinalReport,
   type NativeSkillResult,
 } from '../../../../packages/api-contract/native-skill-orchestration.ts';
+import type { ControlFinalReport } from '../../../../packages/api-contract/historical-final-report.ts';
 import type { VisualAssetManifest } from '../../../../packages/api-contract/research-deliverable.ts';
 import { ControlPlaneConflictError, type ControlPlaneRepository } from '../../../../database/control-plane.ts';
 import { getUserById } from '../../../../database/repository.ts';
@@ -69,7 +69,7 @@ export interface ControlTasksRuntime {
   getDeliverable(taskId: string, ownerUserId: string): Promise<unknown | null>;
   getFinalReport?(taskId: string, ownerUserId: string): Promise<{
     artifact: { id: string };
-    report: NativeFinalReport;
+    report: ControlFinalReport;
   } | null>;
   getSkillResults?(taskId: string, ownerUserId: string): Promise<NativeSkillResult[] | null>;
   readFinalReportHtml?(input: {
