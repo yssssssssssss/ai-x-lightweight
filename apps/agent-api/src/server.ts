@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { closePool, loadEnv, pool } from '../../../database/db.ts';
 loadEnv(); // 读 .env:DATABASE_URL / LLM 网关 / JWT_SECRET
 
@@ -32,6 +34,7 @@ import {
 export interface AgentApiDependencies {
   controlRuntime?: ControlRuntime;
   controlPlanning?: ControlPlanningPort;
+  webDistDir?: string | false;
 }
 
 function refinementResponse(
@@ -206,10 +209,37 @@ export function createAgentApiApp(deps: AgentApiDependencies = {}) {
       getDeliverable: async () => null,
     }));
   }
+
+  const webDistDir = deps.webDistDir === false
+    ? null
+    : resolve(deps.webDistDir ?? 'apps/web/dist');
+  const webIndex = webDistDir ? resolve(webDistDir, 'index.html') : null;
+  if (webDistDir && webIndex && existsSync(webIndex)) {
+    app.use(express.static(webDistDir, {
+      index: false,
+      setHeaders(response, filePath) {
+        response.setHeader(
+          'Cache-Control',
+          filePath.includes(`${webDistDir}/assets/`)
+            ? 'public, max-age=31536000, immutable'
+            : 'no-cache',
+        );
+      },
+    }));
+    app.use((req, res, next) => {
+      if (req.method !== 'GET' || req.path === '/api' || req.path.startsWith('/api/')) {
+        next();
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-cache');
+      res.sendFile(webIndex);
+    });
+  }
   return app;
 }
 if (import.meta.url === `file://${process.argv[1]}`) {
   const PORT = Number(process.env.API_PORT ?? 3001);
+  const HOST = process.env.HOST?.trim() || '127.0.0.1';
   const controlRuntime = buildControlRuntime();
   const recovery = new ExecutionRecoveryController(
     new ExecutionRecoveryService({
@@ -232,8 +262,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     ? setInterval(recoverZeroPublications, zeroRecoveryIntervalMs)
     : null;
   zeroRecoveryTimer?.unref();
-  const server = createAgentApiApp({ controlRuntime }).listen(PORT, () => {
-    console.log(`agent-api listening on http://localhost:${PORT}`);
+  const server = createAgentApiApp({ controlRuntime }).listen(PORT, HOST, () => {
+    console.log(`agent-api listening on http://${HOST}:${PORT}`);
   });
   const shutdown = async () => {
     if (zeroRecoveryTimer) clearInterval(zeroRecoveryTimer);

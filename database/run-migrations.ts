@@ -1,14 +1,15 @@
-import { dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { closePool, pool } from './db.ts';
 import { runDatabaseMigrations } from './migration-entry.ts';
 import { planMigrations } from './migration-runner.ts';
 import { createPostgresMigrationDatabase } from './postgres-migration-database.ts';
 
-const here = dirname(fileURLToPath(import.meta.url));
+const migrationsDir = resolve(
+  process.env.MIGRATIONS_DIR?.trim() || 'database/migrations',
+);
 
 export async function main(): Promise<void> {
-  const migrationsDir = `${here}/migrations`;
   if (process.argv.includes('--dry-run')) {
     const plan = planMigrations(migrationsDir);
     console.log(`migration dry-run: ${plan.migrations.length} files`);

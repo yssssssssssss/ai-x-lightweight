@@ -10,9 +10,13 @@ export function loadEnv(): void {
 }
 loadEnv();
 
+const configuredDatabaseUrl = process.env.DATABASE_URL?.trim();
+if (process.env.NODE_ENV === 'production' && !configuredDatabaseUrl) {
+  throw new Error('DATABASE_URL is required when NODE_ENV=production');
+}
+
 // 单一连接池:所有 DB 访问经此。
-const connectionString =
-  process.env.DATABASE_URL ?? 'postgres://localhost:5432/user_research_ai';
+const connectionString = configuredDatabaseUrl || 'postgres://localhost:5432/user_research_ai';
 
 export let pool = new Pool({ connectionString });
 

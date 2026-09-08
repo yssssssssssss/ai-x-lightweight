@@ -1,6 +1,6 @@
 {
-  "name": "user-research-ai",
-  "version": "0.0.1",
+  "name": "ai-x-lightweight",
+  "version": "0.1.0",
   "private": true,
   "description": "用研 AI 专项 · Agent Harness + Skill Orchestrator 底座(V0/P0)",
   "type": "module",
@@ -35,6 +35,11 @@
     "eval:skills:kb:compare": "tsx evaluations/skills/kb/compare.ts",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p apps/web/tsconfig.json",
+    "build:api": "rm -rf dist && tsc -p tsconfig.build.json",
+    "build:web": "pnpm --dir apps/web build",
+    "build": "pnpm build:api && pnpm build:web",
+    "migrate:prod": "node dist/database/run-migrations.js",
+    "start": "node dist/apps/agent-api/src/server.js",
     "quality": "pnpm typecheck && pnpm lint:registry && pnpm lint:knowledge && pnpm test",
     "editorial:showcase": "tsx apps/orchestrator-runtime/src/universal-editorial-report.ts",
     "editorial:showcase:offline": "tsx apps/orchestrator-runtime/src/universal-editorial-showcase.ts"
