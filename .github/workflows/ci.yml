@@ -65,7 +65,9 @@ jobs:
       - run: pnpm --dir apps/web install --frozen-lockfile
       - run: pnpm db:migrate
       - run: pnpm quality
-      - run: pnpm --dir apps/web build
+      - run: pnpm build
+      - run: node dist/database/run-migrations.js --dry-run
+      - run: docker build --build-arg APP_BUILD_ID="$GITHUB_SHA" --tag ai-x-lightweight:ci .
 
   current-real-smoke:
     name: Current real smoke (seven profiles)
