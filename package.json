@@ -2,7 +2,7 @@
   "name": "ai-x-lightweight",
   "version": "0.1.0",
   "private": true,
-  "description": "用研 AI 专项 · Agent Harness + Skill Orchestrator 底座(V0/P0)",
+  "description": "原生 Skill 编排、材料输入与确定性报告运行时",
   "type": "module",
   "packageManager": "pnpm@9.12.1",
   "engines": {
