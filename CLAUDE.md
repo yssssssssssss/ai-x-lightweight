@@ -1,10 +1,10 @@
-# ai-x
+# ai-x-lightweight
 
 ## Agent skills
 
 ### Issue tracker
 
-GitHub Issues on `yssssssssssss/ai-x` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `yssssssssssss/ai-x-lightweight` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
