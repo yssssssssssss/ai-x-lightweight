@@ -68,6 +68,33 @@ jobs:
       - run: pnpm build
       - run: node dist/database/run-migrations.js --dry-run
       - run: docker build --build-arg APP_BUILD_ID="$GITHUB_SHA" --tag ai-x-lightweight:ci .
+      - name: Smoke standalone container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            -e NODE_ENV=production \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e LLM_PROVIDER=mock \
+            -e LLM_MODEL_NAME=mock-llm \
+            -e LLM_EXPECTED_ACTUAL_MODEL=mock-llm \
+            -e TOOL_ADAPTER=fake \
+            ai-x-lightweight:ci \
+            node dist/database/run-migrations.js
+          container_id="$(docker run -d --network host \
+            -e NODE_ENV=production \
+            -e DATABASE_URL="$DATABASE_URL" \
+            -e JWT_SECRET="$JWT_SECRET" \
+            -e LLM_PROVIDER=mock \
+            -e LLM_MODEL_NAME=mock-llm \
+            -e LLM_EXPECTED_ACTUAL_MODEL=mock-llm \
+            -e TOOL_ADAPTER=fake \
+            ai-x-lightweight:ci)"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+          curl --fail --silent --show-error --retry 30 --retry-all-errors --retry-delay 1 \
+            http://127.0.0.1:3001/api/healthz
+          curl --fail --silent --show-error http://127.0.0.1:3001/ | grep -q '<div id="root"></div>'
 
   current-real-smoke:
     name: Current real smoke (seven profiles)
