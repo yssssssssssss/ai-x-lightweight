@@ -149,6 +149,7 @@ export type {
   ControlExecutionResult,
   ControlPlanCandidatesResponse,
   ControlTaskResponse,
+  ControlTaskStatusResponse,
   ControlWorkflowState as ControlTaskState,
   CreateTaskFollowUpRequest,
   CurrentTaskReadResponse,
@@ -199,6 +200,7 @@ import type {
   ConfirmControlPlanRequest,
   ControlCommandResponse,
   ControlExecutionResult,
+  ControlTaskStatusResponse,
   CreateTaskFollowUpRequest,
   CurrentTaskReadResponse,
   ExecutionControlPlanRequest,
@@ -402,6 +404,8 @@ export const api = {
   skills: () => req<{ skills: SkillItem[] }>('/skills'),
   controlTask: (taskId: string) =>
     req<CurrentTaskReadResponse>(`/control-tasks/${taskId}`),
+  controlTaskStatus: (taskId: string) =>
+    req<ControlTaskStatusResponse>(`/control-tasks/${encodeURIComponent(taskId)}/status`),
   selectControlPlan: (taskId: string, body: SelectControlPlanRequest) =>
     req<SelectControlPlanResponse>(`/control-tasks/${taskId}/select`, { method: 'POST', body, headers: { 'Idempotency-Key': body.idempotencyKey } }),
   confirmControlPlan: (taskId: string, body: ConfirmControlPlanRequest) =>

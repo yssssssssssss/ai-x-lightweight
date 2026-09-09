@@ -74,6 +74,20 @@ const INITIAL_POLL_DELAY_MS = 2_000;
 const MAX_POLL_DELAY_MS = 16_000;
 const INTAKE_UPLOAD_CONCURRENCY = 3;
 
+function taskStatusSignature(input: {
+  state: string;
+  stateVersion: number;
+  currentAttemptId: string | null;
+  executionSteps: ReadonlyArray<{ stepNo: number; state: string }>;
+}): string {
+  return JSON.stringify({
+    state: input.state,
+    stateVersion: input.stateVersion,
+    currentAttemptId: input.currentAttemptId,
+    executionSteps: input.executionSteps.map(({ stepNo, state }) => [stepNo, state]),
+  });
+}
+
 interface CachedIntakeUpload {
   files: readonly File[];
   metadata: string | null;
@@ -216,6 +230,7 @@ export function useTaskFlow() {
   const clarificationSubmission = useRef(createClarificationSubmissionState());
   const intakeUploadCache = useRef(new Map<string, CachedIntakeUpload>());
   const intakeConfirmation = useRef<CachedIntakeConfirmation | null>(null);
+  const statusSignatureRef = useRef('');
   const restoreGeneration = useRef(0);
   const [clarificationSubmitting, setClarificationSubmitting] = useState(false);
 
@@ -299,6 +314,12 @@ export function useTaskFlow() {
     setProgress([]);
     setApprovalRequirements(current.approvalRequirements ?? []);
     setPlanRecovery(current.planRecovery ?? null);
+    statusSignatureRef.current = taskStatusSignature({
+      state: current.task.state,
+      stateVersion: current.task.stateVersion,
+      currentAttemptId: current.task.currentAttemptId,
+      executionSteps: current.executionSteps,
+    });
 
     const { state, stateVersion: restoredStateVersion, currentAttemptId } = current.task;
     if (hydrated.phase === 'paused') {
@@ -384,10 +405,21 @@ export function useTaskFlow() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let delay = INITIAL_POLL_DELAY_MS;
     const poll = async (): Promise<void> => {
-      const refreshed = await restoreTask(currentTaskId, { loading: false, silent: true });
+      try {
+        const status = await api.controlTaskStatus(currentTaskId);
+        if (cancelled) return;
+        const signature = taskStatusSignature(status);
+        if (signature !== statusSignatureRef.current) {
+          const refreshed = await restoreTask(currentTaskId, { loading: false, silent: true });
+          delay = refreshed ? INITIAL_POLL_DELAY_MS : Math.min(delay * 2, MAX_POLL_DELAY_MS);
+        } else {
+          delay = Math.min(delay * 2, MAX_POLL_DELAY_MS);
+        }
+      } catch {
+        delay = Math.min(delay * 2, MAX_POLL_DELAY_MS);
+      }
       if (cancelled) return;
-      delay = refreshed ? INITIAL_POLL_DELAY_MS : Math.min(delay * 2, MAX_POLL_DELAY_MS);
-      timer = setTimeout(() => { void poll(); }, delay);
+      timer = setTimeout(() => { void poll(); }, document.hidden ? MAX_POLL_DELAY_MS : delay);
     };
     timer = setTimeout(() => { void poll(); }, delay);
     return () => {
@@ -408,6 +440,7 @@ export function useTaskFlow() {
 
   function reset() {
     restoreGeneration.current += 1;
+    statusSignatureRef.current = '';
     clarificationSubmission.current = createClarificationSubmissionState();
     clearIntakeSubmission();
     setClarificationSubmitting(false);
@@ -445,6 +478,7 @@ export function useTaskFlow() {
     orchestrationMode: OrchestrationModeV1 = 'single_skill',
   ) {
     restoreGeneration.current += 1;
+    statusSignatureRef.current = '';
     clarificationSubmission.current = createClarificationSubmissionState();
     clearIntakeSubmission();
     setClarificationSubmitting(false);

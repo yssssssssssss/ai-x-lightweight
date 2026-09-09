@@ -648,11 +648,12 @@ interface ParsedMaterialFiles {
 function readMaterialFilesMultipart(
   req: Request,
   invalid: (message: string) => Error,
+  maxFiles: number,
 ): Promise<ParsedMaterialFiles> {
   return new Promise((resolve, reject) => {
     let parser: ReturnType<typeof Busboy>;
     try {
-      parser = Busboy({ headers: req.headers, limits: { files: 20, fields: 0, fileSize: 10 * 1024 * 1024 } });
+      parser = Busboy({ headers: req.headers, limits: { files: maxFiles, fields: 0, fileSize: 10 * 1024 * 1024 } });
     } catch (error) {
       reject(invalid(error instanceof Error ? error.message : 'invalid multipart request'));
       return;
@@ -684,7 +685,7 @@ function readMaterialFilesMultipart(
     });
     parser.on('filesLimit', () => {
       rejected = true;
-      reject(invalid('file count exceeds 20 files'));
+      reject(invalid(`file count exceeds ${maxFiles} files`));
     });
     parser.on('error', reject);
     parser.on('finish', () => {
@@ -1100,6 +1101,46 @@ export function createControlTasksRouter(runtime: ControlTasksRuntime): Router {
     }
   });
 
+router.get('/:id/status', async (req, res) => {
+  const actor = await authenticatedActor(req, res);
+  if (!actor) return;
+  const taskId = typeof req.params.id === 'string' ? req.params.id : req.params.id[0] ?? '';
+  try {
+    const task = await repository.getTaskDetail(taskId);
+    if (!task) {
+      res.status(404).json({ error: '任务不存在' });
+      return;
+    }
+    const isOwner = task.ownerUserId === actor.userId
+      && task.conversationOwnerUserId === actor.userId;
+    const approvals = !isOwner && task.state === 'awaiting_approval'
+      ? await readApprovalRequirements(repository, task, actor.role)
+      : [];
+    const canReviewAsApprover = approvals.some((approval) => approval.requiredAuthority === actor.role);
+    if (!isOwner && !canReviewAsApprover) {
+      res.status(404).json({ error: '任务不存在' });
+      return;
+    }
+    const executionSteps = task.currentAttemptId
+      ? await repository.listExecutionSteps(task.currentAttemptId)
+      : [];
+    res.json({
+      taskId: task.id,
+      state: task.state,
+      stateVersion: task.stateVersion,
+      currentAttemptId: task.currentAttemptId,
+      executionSteps: executionSteps.map((step) => ({
+        stepNo: step.stepNo,
+        state: step.state,
+        startedAt: step.startedAt?.toISOString() ?? null,
+        finishedAt: step.finishedAt?.toISOString() ?? null,
+      })),
+    });
+  } catch (error) {
+    responseError(res, error);
+  }
+});
+
 router.get('/:id', async (req, res) => {
   const actor = await authenticatedActor(req, res);
   if (!actor) return;
@@ -1282,6 +1323,7 @@ router.post('/:id/plans/:planVersionId/inputs/:role/document', async (req, res) 
     const upload = await readMaterialFilesMultipart(
       req,
       (message) => new DocumentInputGateError(message),
+      20,
     );
     const result = await runtime.uploadDocument({
       taskId,
@@ -1319,6 +1361,7 @@ router.post('/:id/plans/:planVersionId/inputs/:role/visual', async (req, res) =>
     const upload = await readMaterialFilesMultipart(
       req,
       (message) => new VisualInputGateError(message),
+      12,
     );
     const result = await runtime.uploadVisual({
       taskId,

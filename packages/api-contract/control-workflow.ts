@@ -90,6 +90,19 @@ export interface ControlTaskResponse {
   orchestrationMode?: OrchestrationModeV1 | null;
 }
 
+export interface ControlTaskStatusResponse {
+  taskId: string;
+  state: ControlWorkflowState;
+  stateVersion: number;
+  currentAttemptId: string | null;
+  executionSteps: Array<{
+    stepNo: number;
+    state: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+  }>;
+}
+
 export interface CreateControlTaskRequest {
   originalInput: string;
   taskType?: string;

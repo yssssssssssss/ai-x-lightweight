@@ -1,6 +1,6 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：In Progress（Phase 0-3 已完成，Phase 4 进行中）
+> 状态：In Progress（Phase 0-4 已完成，Phase 5 等待用户人工验收）
 > 日期：2026-09-09
 > 基线分支：`main`
 > 实施分支：`feat/skill-intake-follow-up-optimization`
@@ -714,6 +714,10 @@ UI 必须明确：
 由 §15 用四类测试覆盖：正常多轮与刷新恢复、owner/任务状态边界、幂等与 Source 子集、请求新研究时转为修订任务。既有 Final Report 和 Artifact 测试继续证明报告不可变；不新增 LLM Reviewer 或内容打分测试。
 
 ## 10. Phase 4：性能优化
+
+本轮已实现：轻量 Task Status API、仅状态变化时读取完整 Task、无变化轮询退避、页面隐藏降频、visual 入口 12 文件边界，以及 Skill Catalog 进程级快照缓存。
+
+以下第二阶段优化暂不实施：multipart 临时文件流式落盘、CSV 增量画像、模型图片派生和 Single 报告响应裁剪。当前没有压力数据或 Gateway 图片参数支持这些额外复杂度；它们保留为出现实际内存、延迟或模型限制证据后的定向优化，不阻塞本轮完成。
 
 ### 10.1 轻量状态读取
 

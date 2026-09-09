@@ -7,8 +7,10 @@ import { InstalledSkillCatalog } from '../apps/orchestrator-runtime/src/runtime/
 import { SkillLoader } from '../apps/orchestrator-runtime/src/runtime/skill-loader.ts';
 import { getConfigRoot, setConfigRoot } from '../apps/orchestrator-runtime/src/runtime/config-loader.ts';
 
-test('discovers the unchanged project Skill packages deterministically', () => {
-  const snapshot = new InstalledSkillCatalog().scan();
+test('discovers the unchanged project Skill packages deterministically and caches one process snapshot', () => {
+  const catalog = new InstalledSkillCatalog();
+  const snapshot = catalog.scan();
+  assert.equal(catalog.scan(), snapshot);
   assert.equal(snapshot.skills.length, 26);
   assert.equal(snapshot.skills.filter(({ readiness }) => readiness === 'ready').length, 25);
   assert.equal(snapshot.skills.find(({ id }) => id === 'solution-generation')?.readiness, 'blocked');

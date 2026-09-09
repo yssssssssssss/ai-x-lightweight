@@ -1344,6 +1344,25 @@ test('Visual multipart upload forwards image bytes without data URLs', async () 
       bytes: [...file.bytes],
     })), [{ fileName: 'screen.png', mediaType: 'image/png', bytes: [0x89, 0x50, 0x4e, 0x47] }]);
     assert.doesNotMatch(JSON.stringify(call), /data:image|base64/u);
+
+    const tooMany = new FormData();
+    for (let index = 0; index < 13; index += 1) {
+      tooMany.append(
+        'file',
+        new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47])], { type: 'image/png' }),
+        `screen-${index + 1}.png`,
+      );
+    }
+    const rejected = await fetch(
+      `${local.baseUrl}/api/control-tasks/${task.id}/plans/${plan.id}/inputs/jd_screenshots/visual`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'Idempotency-Key': randomUUID() },
+        body: tooMany,
+      },
+    );
+    assert.equal(rejected.status, 422);
+    assert.equal(calls.length, 1);
   } finally {
     await closeLocalServer(local.server);
   }
@@ -3344,6 +3363,39 @@ test('report follow-up routes stay task-scoped and require an idempotency key', 
       headers: { authorization: `Bearer ${foreignToken}` },
     });
     assert.equal(foreign.status, 404);
+  } finally {
+    await closeLocalServer(app.server);
+  }
+});
+
+test('task status route returns only lightweight execution state', async () => {
+  const created = await repository.createTask({
+    conversationId,
+    ownerUserId,
+    originalInput: 'lightweight status',
+    taskType: 'competitive_research',
+    structuredTask: { research_goal: '读取状态' },
+    state: 'ready',
+  });
+  const runtime = {
+    repository,
+    workflow: {} as TaskWorkflowService,
+    getDeliverable: async () => null,
+  } as unknown as ControlTasksRuntime;
+  const app = await listenLocalApp(controlTasksApp(runtime));
+  try {
+    const response = await fetch(`${app.baseUrl}/api/control-tasks/${created.id}/status`, {
+      headers: {
+        authorization: `Bearer ${signToken({ userId: ownerUserId, email: 'owner@test.local' })}`,
+      },
+    });
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(Object.keys(body).sort(), [
+      'currentAttemptId', 'executionSteps', 'state', 'stateVersion', 'taskId',
+    ]);
+    assert.equal(body.state, 'ready');
+    assert.equal(JSON.stringify(body).includes('activePlan'), false);
   } finally {
     await closeLocalServer(app.server);
   }
