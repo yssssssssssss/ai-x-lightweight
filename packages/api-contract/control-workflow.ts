@@ -188,6 +188,31 @@ export interface ControlCommandResponse {
   stateVersion: number;
 }
 
+export const TASK_FOLLOW_UP_MESSAGE_VERSION = 'task-follow-up-message-v1' as const;
+
+export interface TaskFollowUpMessageV1 {
+  version: typeof TASK_FOLLOW_UP_MESSAGE_VERSION;
+  id: string;
+  taskId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sourceIds: string[];
+  gaps: string[];
+  createdAt: string;
+}
+
+export interface CreateTaskFollowUpRequest {
+  message: string;
+}
+
+export interface TaskFollowUpResponse {
+  messages: TaskFollowUpMessageV1[];
+}
+
+export interface TaskFollowUpListResponse {
+  messages: TaskFollowUpMessageV1[];
+}
+
 export type ControlApprovalDecision = 'pending' | 'approved' | 'rejected';
 
 export interface ControlApprovalRequirement {

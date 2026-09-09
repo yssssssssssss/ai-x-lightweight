@@ -1,6 +1,6 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：In Progress（Phase 0-2 已完成，Phase 3 进行中）
+> 状态：In Progress（Phase 0-3 已完成，Phase 4 进行中）
 > 日期：2026-09-09
 > 基线分支：`main`
 > 实施分支：`feat/skill-intake-follow-up-optimization`
@@ -537,7 +537,7 @@ interface IntakeItemState {
 - 任意文件再次上传；
 - 自动把“重做”解释成不可逆执行。
 
-用户需要新事实、补材料或重跑时，UI 明确提供“创建修订任务”。
+用户需要新事实、补材料或重跑时，回答与 UI 明确提示改用“新任务”入口；首版不自动携带原任务创建修订链。
 
 ### 9.2 API
 
@@ -684,7 +684,7 @@ interface TaskFollowUpAnswerV1 {
 - assistant message 的 `artifact_id` 指向本轮依据的 Final Report Artifact；
 - 使用现有 control command reservation 保证 LLM 调用幂等；
 - GET 接口只返回 `content.taskId` 等于当前 task 的 follow-up message；
-- `listMessages` 增加 `created_at`，不迁移旧消息；
+- 使用任务级只读查询返回 `created_at`，不改变通用 `listMessages` 合同；
 - 历史非 follow-up message 不进入任务追问 UI。
 
 当真实使用量证明 JSONB taskId 查询成为瓶颈后，再评估专用列或索引；首版不提前迁移。
@@ -704,7 +704,7 @@ interface TaskFollowUpAnswerV1 {
 UI 必须明确：
 
 - “发送”是解释当前报告；
-- “创建修订任务”会带上原 task ID 和用户的新要求创建新任务；
+- 新事实、补材料或重跑使用左侧“新任务”入口；
 - 原报告不会被追问修改；
 - 回答中的 Source ID 可定位到当前报告来源；
 - 页面刷新后消息仍存在。

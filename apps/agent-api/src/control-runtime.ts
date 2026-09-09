@@ -103,6 +103,7 @@ import { createEditorialSummaryPipeline } from '../../orchestrator-runtime/src/e
 import { buildRuntime } from '../../orchestrator-runtime/src/runtime/agent-runtime.ts';
 import { VisualInputMaterializer } from '../../orchestrator-runtime/src/report/visual-input-materializer.ts';
 import { renderNativeReportBundle } from '../../orchestrator-runtime/src/report/native-report-renderer.ts';
+import { TaskFollowUpService } from '../../orchestrator-runtime/src/report/task-follow-up-service.ts';
 import type { LLMClient } from '../../orchestrator-runtime/src/runtime/llm-client.ts';
 import { ReceiptLLMClient } from '../../orchestrator-runtime/src/runtime/receipt-llm-client.ts';
 import { SchemaValidator } from '../../orchestrator-runtime/src/schema/validator.ts';
@@ -536,6 +537,7 @@ export interface ControlRuntime {
   repository: ControlPlaneRepository;
   artifacts: ControlArtifactStore;
   zeroPublication?: ZeroPublicationService;
+  followUps: TaskFollowUpService;
   annotateVisualAsset(input: ImageAnnotationInput): Promise<ImageAnnotationResult>;
   getFinalReport(taskId: string, ownerUserId: string): Promise<{
     artifact: ControlArtifact;
@@ -691,6 +693,11 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
     throw new Error('LLM_EXPECTED_ACTUAL_MODEL is required for the production control runtime');
   }
   const receiptLlm = new ReceiptLLMClient(llm, repository);
+  const followUps = new TaskFollowUpService({
+    llm: receiptLlm,
+    store: repository,
+    expectedActualModel,
+  });
   const gatewayBaseUrl = process.env.LLM_GATEWAY_BASE_URL?.trim();
   const endpointUrl = gatewayBaseUrl
     ? `${gatewayBaseUrl.replace(/\/$/u, '')}/chat/completions`
@@ -1260,6 +1267,7 @@ export function buildControlRuntime(overrides: ControlRuntimeOverrides = {}): Co
     workflow,
     repository,
     artifacts,
+    followUps,
     ...(zeroPublication ? { zeroPublication } : {}),
     uploadDataset: async (input) => {
       const task = await repository.getTaskDetail(input.taskId);

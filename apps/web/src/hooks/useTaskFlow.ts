@@ -18,6 +18,7 @@ import {
   type OrchestrationModeV1,
   type PlanProgress,
   type PlanResponse,
+  type TaskFollowUpMessageV1,
   type DatasetUpload,
   type DocumentUpload,
   type VisualUpload,
@@ -201,6 +202,10 @@ export function useTaskFlow() {
   const [skillResults, setSkillResults] = useState<NativeSkillResult[]>([]);
   const [reportState, setReportState] = useState<ReportState>('idle');
   const [deliverableError, setDeliverableError] = useState('');
+  const [followUpMessages, setFollowUpMessages] = useState<TaskFollowUpMessageV1[]>([]);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [followUpSubmitting, setFollowUpSubmitting] = useState(false);
+  const [followUpError, setFollowUpError] = useState('');
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<PlanProgress[]>([]);
   const [approvalRequirements, setApprovalRequirements] = useState<ControlApprovalRequirement[]>([]);
@@ -221,6 +226,26 @@ export function useTaskFlow() {
     setExecutionPlanSteps(executionPlanStepsForTask(current));
   }
 
+  const loadTaskFollowUps = useCallback(async (
+    taskId: string,
+    generation?: number,
+  ): Promise<void> => {
+    setFollowUpLoading(true);
+    setFollowUpError('');
+    try {
+      const response = await api.controlFollowUps(taskId);
+      if (generation !== undefined && generation !== restoreGeneration.current) return;
+      setFollowUpMessages(response.messages);
+    } catch (cause) {
+      if (generation !== undefined && generation !== restoreGeneration.current) return;
+      setFollowUpError(message(cause, '报告追问记录加载失败'));
+    } finally {
+      if (generation === undefined || generation === restoreGeneration.current) {
+        setFollowUpLoading(false);
+      }
+    }
+  }, []);
+
   async function loadDeliverable(taskId: string): Promise<void> {
     setReportState('loading');
     setDeliverableError('');
@@ -232,6 +257,7 @@ export function useTaskFlow() {
       setFinalReport(loadedFinalReport);
       setSkillResults(loadedSkillResults.results);
       setReportState('ready');
+      await loadTaskFollowUps(taskId);
     } catch (cause) {
       setDeliverableError(message(cause, '报告加载失败'));
       setReportState('report-loading-error');
@@ -263,6 +289,10 @@ export function useTaskFlow() {
     setExecutionPlanSteps(executionPlanStepsForTask(current));
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
@@ -310,12 +340,13 @@ export function useTaskFlow() {
       setFinalReport(restoredFinalReport);
       setSkillResults(restoredSkillResults.results);
       setReportState('ready');
+      await loadTaskFollowUps(current.task.id, generation);
     } catch (cause) {
       if (generation !== restoreGeneration.current) return;
       setDeliverableError(message(cause, '报告加载失败'));
       setReportState('report-loading-error');
     }
-  }, []);
+  }, [loadTaskFollowUps]);
 
   const restoreTask = useCallback(async (
     taskId: string,
@@ -395,6 +426,10 @@ export function useTaskFlow() {
     setExecutionPlanSteps([]);
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
@@ -429,6 +464,10 @@ export function useTaskFlow() {
     setExecutionPlanSteps([]);
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
@@ -829,6 +868,38 @@ export function useTaskFlow() {
     }
   }
 
+  async function submitFollowUp(content: string): Promise<boolean> {
+    if (!currentTaskId || !finalReport || phase !== 'done' || followUpSubmitting) return false;
+    const taskId = currentTaskId;
+    const generation = restoreGeneration.current;
+    setFollowUpSubmitting(true);
+    setFollowUpError('');
+    try {
+      const response = await api.createControlFollowUp(
+        taskId,
+        { message: content },
+        createRequestId(),
+      );
+      if (generation !== restoreGeneration.current) return false;
+      setFollowUpMessages((previous) => {
+        const byId = new Map(previous.map((item) => [item.id, item]));
+        for (const item of response.messages) byId.set(item.id, item);
+        return [...byId.values()].sort((left, right) => (
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+        ));
+      });
+      return true;
+    } catch (cause) {
+      if (generation !== restoreGeneration.current) return false;
+      setFollowUpError(message(cause, '报告追问失败'));
+      return false;
+    } finally {
+      if (generation === restoreGeneration.current) {
+        setFollowUpSubmitting(false);
+      }
+    }
+  }
+
   function retryDeliverable() {
     if (currentTaskId) void loadDeliverable(currentTaskId);
   }
@@ -853,6 +924,10 @@ export function useTaskFlow() {
     skillResults,
     reportState,
     deliverableError,
+    followUpMessages,
+    followUpLoading,
+    followUpSubmitting,
+    followUpError,
     error,
     progress,
     currentTaskId,
@@ -871,6 +946,7 @@ export function useTaskFlow() {
     startExecution,
     cancelExecution,
     resumeStep,
+    submitFollowUp,
     retryDeliverable,
   };
 }

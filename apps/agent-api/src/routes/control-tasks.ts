@@ -11,6 +11,9 @@ import {
   type NativeSkillResult,
 } from '../../../../packages/api-contract/native-skill-orchestration.ts';
 import type { ControlFinalReport } from '../../../../packages/api-contract/historical-final-report.ts';
+import type {
+  TaskFollowUpResponse,
+} from '../../../../packages/api-contract/control-workflow.ts';
 import type { VisualAssetManifest } from '../../../../packages/api-contract/research-deliverable.ts';
 import { ControlPlaneConflictError, type ControlPlaneRepository } from '../../../../database/control-plane.ts';
 import { getUserById } from '../../../../database/repository.ts';
@@ -23,6 +26,10 @@ import {
   type WorkflowActor,
 } from '../../../orchestrator-runtime/src/control/task-workflow.ts';
 import { assertVisualAssetManifestSchema } from '../../../orchestrator-runtime/src/report/visual-asset-service.ts';
+import {
+  TaskFollowUpError,
+  type TaskFollowUpService,
+} from '../../../orchestrator-runtime/src/report/task-follow-up-service.ts';
 import { EditorialSummaryPipelineError } from '../../../orchestrator-runtime/src/report/editorial-summary-pipeline.ts';
 import { EditorialSummaryStoreError } from '../../../orchestrator-runtime/src/report/editorial-summary-store.ts';
 import {
@@ -68,9 +75,10 @@ export interface ControlTasksRuntime {
   workflow: TaskWorkflowService;
   getDeliverable(taskId: string, ownerUserId: string): Promise<unknown | null>;
   getFinalReport?(taskId: string, ownerUserId: string): Promise<{
-    artifact: { id: string };
+    artifact: { id: string; contentSha256: string | null };
     report: ControlFinalReport;
   } | null>;
+  followUps?: Pick<TaskFollowUpService, 'list' | 'create'>;
   getSkillResults?(taskId: string, ownerUserId: string): Promise<NativeSkillResult[] | null>;
   readFinalReportHtml?(input: {
     taskId: string;
@@ -241,6 +249,12 @@ function publicError(error: unknown): {
   status: number;
   body: { error: string; code?: string; kind?: string; retryable?: boolean; unresolved?: unknown };
 } {
+  if (error instanceof TaskFollowUpError) {
+    const status = error.code === 'invalid_request'
+      ? 400
+      : error.code === 'invalid_model_output' ? 502 : 409;
+    return { status, body: { error: error.message, code: error.code } };
+  }
   if (error instanceof DatasetInputGateError) {
     return { status: 422, body: { error: 'CSV 文件格式无效或与当前计划不匹配', code: error.code } };
   }
@@ -794,6 +808,60 @@ export function createControlTasksRouter(runtime: ControlTasksRuntime): Router {
         return;
       }
       res.json(result.report);
+    } catch (error) {
+      responseError(res, error);
+    }
+  });
+
+  router.get('/:id/follow-ups', async (req, res) => {
+    const actor = await authenticatedActor(req, res);
+    if (!actor) return;
+    if (!runtime.followUps) {
+      res.status(503).json({ error: '报告追问暂不可用' });
+      return;
+    }
+    if (!await ensureOwnedTask(runtime, req, res, actor, '报告不存在')) return;
+    try {
+      const taskId = typeof req.params.id === 'string' ? req.params.id : req.params.id[0] ?? '';
+      res.json({ messages: await runtime.followUps.list({ taskId, ownerUserId: actor.userId }) });
+    } catch (error) {
+      responseError(res, error);
+    }
+  });
+
+  router.post('/:id/follow-ups', async (req, res) => {
+    const actor = await authenticatedActor(req, res);
+    const key = idempotencyKey(req);
+    if (!actor) return;
+    if (!runtime.followUps || !runtime.getFinalReport) {
+      res.status(503).json({ error: '报告追问暂不可用' });
+      return;
+    }
+    const message = string(record(req.body)?.message);
+    if (!key || !message) {
+      res.status(400).json({ error: '追问内容和 Idempotency-Key 必填' });
+      return;
+    }
+    const taskId = typeof req.params.id === 'string' ? req.params.id : req.params.id[0] ?? '';
+    try {
+      const task = await runtime.repository.getTaskDetail(taskId);
+      if (!task || task.ownerUserId !== actor.userId || task.conversationOwnerUserId !== actor.userId) {
+        res.status(404).json({ error: '报告不存在' });
+        return;
+      }
+      const report = await runtime.getFinalReport(taskId, actor.userId);
+      if (!report) {
+        res.status(409).json({ error: '任务尚未生成最终报告' });
+        return;
+      }
+      const response: TaskFollowUpResponse = await runtime.followUps.create({
+        task,
+        report,
+        ownerUserId: actor.userId,
+        message,
+        idempotencyKey: key,
+      });
+      res.set('Idempotency-Key', key).json(response);
     } catch (error) {
       responseError(res, error);
     }

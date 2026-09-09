@@ -51,6 +51,7 @@ import type {
   ControlPlanCandidatesResponse,
   ControlWorkflowState,
   CurrentTaskReadResponse,
+  TaskFollowUpResponse,
 } from '../packages/api-contract/control-workflow.ts';
 import { HISTORICAL_FINAL_REPORT_VERSION } from '../packages/api-contract/historical-final-report.ts';
 
@@ -3193,6 +3194,156 @@ test('clarification route rejects tasks outside awaiting_clarification before re
     );
     assert.equal(response.status, 409);
     assert.equal(calls, 0);
+  } finally {
+    await closeLocalServer(app.server);
+  }
+});
+
+test('repository commits one owner-bound report follow-up turn and replays its command', async () => {
+  const created = await repository.createTask({
+    conversationId,
+    ownerUserId,
+    originalInput: 'completed report follow-up',
+    taskType: 'competitive_research',
+    structuredTask: { research_goal: '解释报告' },
+    state: 'completed',
+  });
+  const idempotencyKey = `follow-up-${randomUUID()}`;
+  const requestHash = `sha256:${'a'.repeat(64)}`;
+  const reservation = await repository.reserveFollowUpCommand({
+    taskId: created.id,
+    idempotencyKey,
+    requestHash,
+    expectedVersion: created.stateVersion,
+    actorUserId: ownerUserId,
+  });
+  assert.equal(reservation.status, 'reserved');
+  if (reservation.status !== 'reserved') return;
+  const createdAt = new Date().toISOString();
+  const response: TaskFollowUpResponse = {
+    messages: [{
+      version: 'task-follow-up-message-v1',
+      id: randomUUID(),
+      taskId: created.id,
+      role: 'user',
+      content: '为什么优先处理这个问题？',
+      sourceIds: [],
+      gaps: [],
+      createdAt,
+    }, {
+      version: 'task-follow-up-message-v1',
+      id: randomUUID(),
+      taskId: created.id,
+      role: 'assistant',
+      content: '因为该问题直接影响主流程完成率。',
+      sourceIds: ['S-1'],
+      gaps: [],
+      createdAt,
+    }],
+  };
+  await repository.completeFollowUpCommand({
+    taskId: created.id,
+    conversationId,
+    idempotencyKey,
+    requestHash,
+    expectedVersion: created.stateVersion,
+    reservationToken: reservation.reservationToken,
+    state: 'completed',
+    finalReportArtifactId: randomUUID(),
+    response,
+  });
+
+  assert.deepEqual(await repository.listTaskFollowUps({ taskId: created.id, ownerUserId }), response.messages);
+  assert.deepEqual(await repository.listTaskFollowUps({ taskId: created.id, ownerUserId: foreignUserId }), []);
+  assert.deepEqual(await repository.reserveFollowUpCommand({
+    taskId: created.id,
+    idempotencyKey,
+    requestHash,
+    expectedVersion: created.stateVersion,
+    actorUserId: ownerUserId,
+  }), { status: 'replay', response });
+});
+
+test('report follow-up routes stay task-scoped and require an idempotency key', async () => {
+  const created = await repository.createTask({
+    conversationId,
+    ownerUserId,
+    originalInput: 'follow-up route',
+    taskType: 'competitive_research',
+    structuredTask: { research_goal: '解释报告' },
+    state: 'completed',
+  });
+  const createdAt = new Date().toISOString();
+  const response: TaskFollowUpResponse = {
+    messages: [{
+      version: 'task-follow-up-message-v1', id: randomUUID(), taskId: created.id,
+      role: 'user', content: '解释结论', sourceIds: [], gaps: [], createdAt,
+    }, {
+      version: 'task-follow-up-message-v1', id: randomUUID(), taskId: created.id,
+      role: 'assistant', content: '这是基于报告的解释。', sourceIds: [], gaps: [], createdAt,
+    }],
+  };
+  let createCalls = 0;
+  const runtime = {
+    repository,
+    workflow: {} as TaskWorkflowService,
+    getDeliverable: async () => null,
+    getFinalReport: async () => ({
+      artifact: { id: randomUUID(), contentSha256: `sha256:${'b'.repeat(64)}` },
+      report: {
+        version: HISTORICAL_FINAL_REPORT_VERSION,
+        taskId: created.id,
+        planVersionId: randomUUID(),
+        attemptId: randomUUID(),
+        mode: 'single_skill',
+        title: '历史报告',
+        markdown: '# 报告',
+        sources: [],
+        gaps: [],
+        skillReports: [{
+          skillId: 'competitive-analysis', invocationId: 'competitive-analysis:1',
+          status: 'completed', path: 'skill-results/competitive-analysis.json',
+        }],
+      },
+    }),
+    followUps: {
+      async list() { return response.messages; },
+      async create() { createCalls += 1; return response; },
+    },
+  } as unknown as ControlTasksRuntime;
+  const app = await listenLocalApp(controlTasksApp(runtime));
+  const ownerToken = signToken({ userId: ownerUserId, email: 'owner@test.local' });
+  const foreignToken = signToken({ userId: foreignUserId, email: 'foreign@test.local' });
+  try {
+    const listed = await fetch(`${app.baseUrl}/api/control-tasks/${created.id}/follow-ups`, {
+      headers: { authorization: `Bearer ${ownerToken}` },
+    });
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json() as TaskFollowUpResponse).messages, response.messages);
+
+    const missingKey = await postJson(
+      app.baseUrl,
+      `/api/control-tasks/${created.id}/follow-ups`,
+      ownerToken,
+      { message: '解释结论' },
+    );
+    assert.equal(missingKey.status, 400);
+    assert.equal(createCalls, 0);
+
+    const createdResponse = await postJson(
+      app.baseUrl,
+      `/api/control-tasks/${created.id}/follow-ups`,
+      ownerToken,
+      { message: '解释结论' },
+      randomUUID(),
+    );
+    assert.equal(createdResponse.status, 200);
+    assert.equal(createCalls, 1);
+
+    const foreign = await fetch(`${app.baseUrl}/api/control-tasks/${created.id}/follow-ups`, {
+      headers: { authorization: `Bearer ${foreignToken}` },
+    });
+    assert.equal(foreign.status, 404);
   } finally {
     await closeLocalServer(app.server);
   }
