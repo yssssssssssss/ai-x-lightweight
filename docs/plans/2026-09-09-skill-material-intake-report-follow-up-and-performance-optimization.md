@@ -54,6 +54,18 @@ Phase 5  人工业务验收与稳定版发布
 
 Phase 3 是唯一新增业务纵切；其余均修复或收敛现有能力。
 
+### 1.2 审核与测试原则
+
+本方案不增加 Reviewer、模型自评或多轮全文审核。验证遵循“一个风险边界，一组证据”：
+
+- 每个 Phase 开发时只运行直接相关的目标测试；
+- 一个 Phase 合并前运行一次 `pnpm quality`；
+- 所有 Phase 集成后只运行一次 production build、migration dry-run 和容器 Smoke；
+- Skill 输入覆盖使用一张表驱动合同测试，不为每个 Skill 复制一套测试；
+- 真实模型只做一个主路径和一个第二路径技术 Smoke，不运行七套重复场景；
+- 报告内容质量、五 Tab、图片、打印和追问有用性由用户最后人工验收，不转成机械化 Reviewer；
+- 同一验收条件不在 Phase 小节、总验收和 DoD 中重复列举。
+
 ## 2. 审计范围与证据
 
 本次审计覆盖：
@@ -336,10 +348,12 @@ Secrets 已注入，但 GitHub-hosted Runner 上第一条 Gateway 调用失败�
 
 ### 6.3 Phase 0 验收
 
-- 普通 Quality 稳定绿色；
-- Playwright Job 连续运行不出现时序性误报；
-- Real Smoke 的执行环境和门禁明确；
-- 真实失败输出可区分连接、认证、路由、模型漂移和响应合同，但不打印 Secret。
+- deadline 分类通过一个确定性目标测试；
+- 普通 `pnpm quality` 通过；
+- Real Smoke 的 Runner、网络和凭据门禁明确；
+- 在受保护环境执行一个主路径和一个第二路径技术 Smoke，失败可分类但不打印 Secret。
+
+不要求连续多轮 CI、不在每次提交运行七场景真实调用。
 
 ## 7. Phase 1：补齐 Skill 输入合同
 
@@ -410,28 +424,18 @@ Skill Prompt 可同时消费两者。这样既保留原材料语义，也让 UI 
 
 ### 7.5 新 Skill 接入清单
 
-每个新 Skill 在 active 前必须人工回答：
+Skill 进入 active 前只做一次合同确认：
 
-1. 最少需要哪些输入？
-2. 哪些必需、哪些可选？
-3. 是文字、文档、CSV 还是图片？
-4. 是否允许多个？
-5. 对话、上传、数据库、Knowledge、Tool 中允许哪些来源？
-6. 缺失时应阻断还是形成 Gap？
-7. Multi 中是否与其他 Skill 共用同一个 key？
+1. 输入的 `kind/required/multiple/acceptedSources` 是否明确；
+2. 缺失输入是阻断还是形成 Gap；
+3. 与其他 Skill 共用 key 时合同是否兼容；
+4. 选中的控件是否能把材料送入该 Skill。
 
-Registry lint 只检查结构一致性，不替代以上业务判断。
+Registry lint 只检查结构一致性，不新增人工审批人或 Reviewer。
 
-### 7.6 Phase 1 测试
+### 7.6 Phase 1 验收
 
-- 所有 active Skill 都能生成 Native Run Spec；
-- 所有声明材料的 Skill 都出现正确控件；
-- 数据型 Skill 不再把 CSV 降级成文本框；
-- value/upload 混合声明消失；
-- Multi 相同 key 只问一次；
-- Multi 来源交集为空时明确失败；
-- required/optional 行为稳定；
-- 不影响没有文件输入的 Skill。
+由 §15 的一张表驱动测试覆盖全部 active Skill，再增加一组 Multi 共享/冲突合同测试；不为每个 Skill 复制测试文件。
 
 ## 8. Phase 2：Stage 2 提交可靠性
 
@@ -512,14 +516,7 @@ interface IntakeItemState {
 
 ### 8.6 Phase 2 验收
 
-- 任意单项上传失败后 Stage 2 仍可见；
-- 已选择文件不丢失；
-- 成功项不重复上传；
-- 失败项可单独重试；
-- confirm 失败后仍可重试；
-- 刷新页面后至少能明确显示“需重新选择本地文件”，不伪装文件仍在浏览器；
-- 多 role 提交总耗时低于完全串行路径；
-- Artifact 不出现跨 owner、task 或 plan 复用。
+由 §15 用两条代表路径覆盖：一条成功提交图片/CSV/文档，一条在中途失败后保留表单、复用成功项并单项重试。owner/task/plan 隔离继续复用既有 Gate 与 API 合同测试。
 
 ## 9. Phase 3：报告后任务级追问
 
@@ -715,20 +712,9 @@ UI 必须明确：
 - 回答中的 Source ID 可定位到当前报告来源；
 - 页面刷新后消息仍存在。
 
-### 9.8 Phase 3 测试
+### 9.8 Phase 3 验收
 
-- 非 owner 返回 404；
-- 非完成任务拒绝追问；
-- 缺少 SEALED Final Report 拒绝；
-- 同一 Idempotency-Key 不重复调用模型；
-- Source ID 子集校验；
-- 报告 Artifact 不被修改；
-- ReportDocument 文本投影确定性；
-- 多轮消息顺序稳定；
-- 页面刷新后恢复；
-- 追问不会创建新 Task；
-- 全局 Composer 仍能创建新 Task；
-- 请求新事实时不偷偷调用 Tool。
+由 §15 用四类测试覆盖：正常多轮与刷新恢复、owner/任务状态边界、幂等与 Source 子集、请求新研究时转为修订任务。既有 Final Report 和 Artifact 测试继续证明报告不可变；不新增 LLM Reviewer 或内容打分测试。
 
 ## 10. Phase 4：性能优化
 
@@ -962,81 +948,41 @@ perf: bound material upload memory
 perf: cache installed skill snapshots
 ```
 
-每个提交独立通过目标测试。不要把输入合同、追问和性能优化混成一个提交。
+每个提交只运行直接相关的目标测试。每个 Phase 合并前运行一次 `pnpm quality`；所有 Phase 集成后再统一运行 production build、migration dry-run 和容器 Smoke。不要在每个微小提交重复全量门禁，也不要把输入合同、追问和性能优化混成一个提交。
 
 ## 15. 验收方案
 
-### 15.1 自动合同
+### 15.1 自动验证矩阵
 
-- `pnpm typecheck`
-- Registry/Knowledge lint
-- Input resolution tests
-- Stage 2 payload tests
-- Visual/Dataset/Document Gate tests
-- Control API integration
-- owner isolation
-- idempotency replay
-- Task Workflow
-- Native Single/Multi
-- Follow-up context projection
-- Follow-up API/UI
-- Status polling fake-timer tests
-- production build
-- standalone container smoke
+| 风险边界 | 最少自动证据 |
+|---|---|
+| Skill 输入合同 | 一张表驱动测试覆盖全部 active Skill 的 key/kind/required/multiple/source；一组 Multi 共享与冲突用例 |
+| Stage 2 Intake | 一条图片+CSV+文档成功路径；一条中途失败、保留状态并单项重试路径 |
+| 上传安全 | 复用现有 Visual/Dataset/Document Gate 和 owner/task/plan API 合同 |
+| 报告追问 | 正常多轮与刷新；owner/状态拒绝；幂等+Source 子集；新研究转修订任务 |
+| 状态轮询 | fake timer 验证退避；状态变化只触发一次完整 Task Read |
+| 文件性能 | 文件数/累计字节提前拒绝；CSV 超预算提前终止；Catalog 单进程只扫描一次 |
 
-### 15.2 材料路径
+### 15.2 集成门禁
 
-至少覆盖：
+```text
+Phase 开发中       仅目标测试
+Phase 合并前       pnpm quality（一次）
+全部 Phase 完成    pnpm build + migration dry-run + standalone container smoke（一次）
+受保护真实环境     一个主路径 + 一个第二路径 real smoke（一次）
+```
 
-1. 只需 `research_goal` 的 Skill；
-2. 必需 Markdown/TXT 的 Skill；
-3. 必需 CSV 的 Skill；
-4. 必需图片的 Skill；
-5. 同时需要图片、CSV、文档的 Industry Skill；
-6. Multi 中两个 Skill 共用同一材料；
-7. Multi 中同 key 来源不兼容；
-8. 可选材料豁免；
-9. 上传失败后单项重试；
-10. confirm 失败后重试。
+不在普通 GitHub Runner 上运行七场景真实调用，不用真实延迟毫秒值作为 CI 硬断言。
 
-### 15.3 追问路径
+### 15.3 人工验收
 
-至少覆盖：
+按用户决定，最后只人工检查业务结果：
 
-1. Markdown Final Report；
-2. ReportDocument Final Report；
-3. `completed_with_gaps`；
-4. Source ID 引用；
-5. 证据不足；
-6. 连续三轮追问；
-7. 页面刷新恢复；
-8. 非 owner；
-9. 重复 Idempotency-Key；
-10. 请求新研究时提示创建修订任务。
+- Industry Single 与第二 Skill/Multi；
+- 五 Tab 内容、图片、窄屏、键盘、打印、ZIP；
+- 报告追问是否有用、是否忠于来源。
 
-### 15.4 性能验收
-
-性能测试使用确定性指标，不使用脆弱的 CI 毫秒阈值：
-
-- 无状态变化时完整 Task Read 次数显著下降；
-- status 响应不包含 Run Spec body 和 Reference 内容；
-- visual 路由在第 13 个文件前拒绝；
-- multipart 聚合路径有确定总量和清理断言；
-- CSV 超预算时在封存 Profile 前失败；
-- Catalog 在一个进程生命周期内只扫描一次；
-- follow-up 不发送 HTML/ZIP/Base64。
-
-真实延迟、RSS 和 Token 使用在受控环境记录，不作为普通 GitHub Runner 的硬时间断言。
-
-### 15.5 人工验收
-
-按用户决定，业务内容质量后续人工完成：
-
-- Industry Single；
-- 第二 Skill/Multi；
-- 五 Tab 内容；
-- 图片、窄屏、键盘、打印、ZIP；
-- 报告后追问的有用性和引用准确性。
+人工验收不增加独立 Reviewer 链，不要求每个 Phase 重复审核。
 
 ## 16. 可观测性
 
@@ -1149,21 +1095,11 @@ perf: cache installed skill snapshots
 
 全部满足后，本优化任务完成：
 
-1. 每个 active Skill 的用户材料都有正确 typed requirement；
-2. 数据型 Skill 会显示 CSV，不再退化为普通文本；
-3. 文档型 Skill 会显示 Markdown/TXT 上传；
-4. 图片型 Skill 会显示 JPEG/PNG/WebP 上传；
-5. Multi 共享材料只问一次且来源对所有目标 Skill 有效；
-6. Stage 2 上传失败后可以在原表单单项重试；
-7. 成功上传不因其他项失败而重复；
-8. 报告完成后可以进行任务级多轮追问；
-9. 追问严格基于 Final Report、Source 和 Gap；
-10. 追问不会修改报告、重跑 Skill 或调用新 Tool；
-11. 页面刷新后追问可回放；
-12. 执行期不再每 2 秒传输完整 Native Plan；
-13. 文件批量上传和 CSV 处理有明确内存边界；
-14. Skill Catalog 在生产进程内不重复扫描；
-15. 普通 Quality 稳定绿色；
-16. 真实 Gateway Smoke 在可访问 Gateway 的受保护环境运行；
-17. 全量测试、production build、migration dry-run、容器 Smoke 通过；
-18. 最终业务内容由用户按计划人工验收后再发布稳定版。
+1. 所有 active Skill 的 typed requirement 与实际控件一致，Multi 共用输入只问一次且来源有效；
+2. Stage 2 能提交图片、CSV、Markdown/TXT，并能在失败后保留状态、单项重试；
+3. 报告完成后支持可恢复的任务级多轮追问，回答只基于 Final Report、Source 和 Gap；
+4. 追问不会修改报告、重跑 Skill、调用新 Tool 或创建隐式新任务；
+5. 执行期不再每 2 秒传输完整 Native Plan，文件和 CSV 处理有明确资源边界；
+6. Skill Catalog 在生产进程内不重复扫描；
+7. §15 的目标测试、一次集成门禁和两条受保护真实技术 Smoke 通过；
+8. 业务内容质量由用户完成一次最终人工验收后再发布稳定版。
