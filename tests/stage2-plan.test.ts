@@ -8,6 +8,7 @@ import {
 } from '../apps/web/src/components/stages/stage2-plan-confirmation.ts';
 
 const component = new URL('../apps/web/src/components/stages/Stage2Plan.tsx', import.meta.url);
+const taskFlow = new URL('../apps/web/src/hooks/useTaskFlow.ts', import.meta.url);
 
 test('Stage2Plan renders frozen competitive weights as read-only definition data', async () => {
   const source = await readFile(component, 'utf8');
@@ -137,6 +138,21 @@ test('Stage2 confirmation keeps uploaded documents as opaque pre-upload requests
   assert.deepEqual(payload.visualUploads, []);
   assert.deepEqual(payload.datasetUploads, []);
   assert.deepEqual(payload.documentUploads, [{ role: 'internal_documents', files }]);
+});
+
+test('Stage2 keeps selected materials available when upload or confirmation fails', async () => {
+  const [componentSource, taskFlowSource] = await Promise.all([
+    readFile(component, 'utf8'),
+    readFile(taskFlow, 'utf8'),
+  ]);
+  const awaitConfirm = componentSource.indexOf('await onConfirm(');
+  const markConfirmed = componentSource.indexOf('setConfirmed(true)', awaitConfirm);
+  assert.ok(awaitConfirm >= 0 && markConfirmed > awaitConfirm);
+  assert.match(componentSource, /setSubmitError\(error instanceof Error/u);
+  assert.match(componentSource, /正在上传并确认/u);
+  assert.match(taskFlowSource, /await runIntakeUploads\(operations\)/u);
+  assert.match(taskFlowSource, /intakeUploadCache\.current\.get/u);
+  assert.match(taskFlowSource, /setPhase\('planned'\);\s*throw cause/u);
 });
 
 test('Stage2 parses quoted UTF-8 CSV headers and scopes field metadata to the selected columns', () => {

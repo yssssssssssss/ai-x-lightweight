@@ -23,6 +23,9 @@ import {
 } from './stage2-plan-confirmation.ts';
 
 const IMAGE_FILE_ACCEPT = '.jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp';
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+const MAX_VISUAL_FILES = 12;
+const MAX_DOCUMENT_FILES = 20;
 
 function pendingInputLabel(input: PendingUpload): string {
   return input.label;
@@ -47,7 +50,7 @@ export function Stage2Plan({
     datasetUploads: DatasetUpload[],
     documentUploads: DocumentUpload[],
     waivedInputKeys: string[],
-  ) => void;
+  ) => Promise<void>;
   onRevise: (instruction: string) => void;
 }) {
   const confirmations = 'confirmations' in plan.task
@@ -88,12 +91,26 @@ export function Stage2Plan({
   const [values, setValues] = useState<Record<string, string>>({});
   const [waivedInputKeys, setWaivedInputKeys] = useState<string[]>([]);
   const [revisionInstruction, setRevisionInstruction] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const formLocked = locked || confirmed || submitting;
 
   function edit(key: string, value: string) {
     setAssumptions((prev) => prev.map((a) => (a.key === key ? { ...a, value } : a)));
   }
 
   function pickImages(pu: PendingUpload, files: File[]): void {
+    if (files.length > MAX_VISUAL_FILES) {
+      setImages((previous) => ({ ...previous, [pu.role]: [] }));
+      setSubmitError(`每项图片材料最多上传 ${MAX_VISUAL_FILES} 张`);
+      return;
+    }
+    if (files.some(({ size }) => size > MAX_UPLOAD_BYTES)) {
+      setImages((previous) => ({ ...previous, [pu.role]: [] }));
+      setSubmitError('单张图片不能超过 10 MiB');
+      return;
+    }
+    setSubmitError('');
     setImages((previous) => ({
       ...previous,
       [pu.role]: pu.multiple ? files : files.slice(0, 1),
@@ -101,6 +118,17 @@ export function Stage2Plan({
   }
 
   function pickDocuments(input: PendingUpload, files: File[]): void {
+    if (files.length > MAX_DOCUMENT_FILES) {
+      setDocuments((previous) => ({ ...previous, [input.role]: [] }));
+      setSubmitError(`每项文档材料最多上传 ${MAX_DOCUMENT_FILES} 个文件`);
+      return;
+    }
+    if (files.some(({ size }) => size > MAX_UPLOAD_BYTES)) {
+      setDocuments((previous) => ({ ...previous, [input.role]: [] }));
+      setSubmitError('单个文档不能超过 10 MiB');
+      return;
+    }
+    setSubmitError('');
     setDocuments((previous) => ({
       ...previous,
       [input.role]: input.multiple ? files : files.slice(0, 1),
@@ -114,7 +142,14 @@ export function Stage2Plan({
       setDatasetHeaderErrors((previous) => ({ ...previous, [role]: undefined }));
       return;
     }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setDatasets((previous) => ({ ...previous, [role]: undefined }));
+      setDatasetColumns((previous) => ({ ...previous, [role]: [] }));
+      setDatasetHeaderErrors((previous) => ({ ...previous, [role]: 'CSV 文件不能超过 10 MiB' }));
+      return;
+    }
     let columns: string[];
+    setSubmitError('');
     try {
       columns = parseDatasetColumns(await file.text());
       setDatasetHeaderErrors((previous) => ({ ...previous, [role]: undefined }));
@@ -176,8 +211,8 @@ export function Stage2Plan({
     });
   }
 
-  function confirm() {
-    if (missingAnswers.length > 0 || missingInputs.length > 0 || (portfolio?.uncoveredRequiredDemandIds.length ?? 0) > 0) return;
+  async function confirm(): Promise<void> {
+    if (submitting || missingAnswers.length > 0 || missingInputs.length > 0 || (portfolio?.uncoveredRequiredDemandIds.length ?? 0) > 0) return;
     const payload = buildPlanConfirmationPayload({
       confirmationAnswers: answers,
       pending,
@@ -187,15 +222,23 @@ export function Stage2Plan({
       documents,
       waivedInputKeys: effectiveWaivedInputKeys,
     });
-    setConfirmed(true);
-    onConfirm(
-      payload.confirmationAnswers,
-      payload.inputValues,
-      payload.visualUploads,
-      payload.datasetUploads,
-      payload.documentUploads ?? [],
-      payload.waivedInputKeys ?? [],
-    );
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      await onConfirm(
+        payload.confirmationAnswers,
+        payload.inputValues,
+        payload.visualUploads,
+        payload.datasetUploads,
+        payload.documentUploads ?? [],
+        payload.waivedInputKeys ?? [],
+      );
+      setConfirmed(true);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : '信息上传或确认失败，请重试');
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const pending = plan.pendingUploads ?? [];
@@ -241,7 +284,7 @@ export function Stage2Plan({
         <input
           type="checkbox"
           checked={waivedSet.has(role)}
-          disabled={locked || confirmed}
+          disabled={formLocked}
           onChange={(event) => setWaivedInputKeys((previous) => event.target.checked
             ? [...new Set([...previous, role])]
             : previous.filter((key) => key !== role))}
@@ -253,7 +296,7 @@ export function Stage2Plan({
 
   return (
     <section className="stage-card">
-      <Header n="2" title="补充信息并确认" note={locked ? '内容已锁定' : '一次提交本次分析所需信息'} />
+      <Header n="2" title="补充信息并确认" note={submitting ? '正在上传并确认…' : locked ? '内容已锁定' : '一次提交本次分析所需信息'} />
       <p style={{ margin: '-2px 0 12px', color: 'var(--text-faint)', fontSize: 12 }}>
         运行模式：{orchestrationLabel}
       </p>
@@ -314,7 +357,7 @@ export function Stage2Plan({
         {assumptions.map((a, index) => (
           <div key={a.key} style={{ display: 'flex', gap: 8, marginBottom: 6, fontSize: 13 }}>
             <span style={{ color: 'var(--text-dim)', width: 120, flexShrink: 0 }}>补充条件 {index + 1}</span>
-            {a.editable && !locked ? (
+            {a.editable && !formLocked ? (
               <input
                 value={a.value}
                 onChange={(e) => edit(a.key, e.target.value)}
@@ -341,7 +384,7 @@ export function Stage2Plan({
                 )}
                 <input
                   required
-                  disabled={locked || confirmed}
+                  disabled={formLocked}
                   value={answers[confirmation.key] ?? ''}
                   onChange={(event) => setAnswers((previous) => ({
                     ...previous,
@@ -384,7 +427,7 @@ export function Stage2Plan({
               </span>
               {input.multiple ? (
                 <textarea
-                  disabled={locked || confirmed || waivedSet.has(input.role)}
+                  disabled={formLocked || waivedSet.has(input.role)}
                   value={values[input.role] ?? ''}
                   onChange={(event) => setValues((previous) => ({ ...previous, [input.role]: event.target.value }))}
                   placeholder="每行填写一个值"
@@ -394,7 +437,7 @@ export function Stage2Plan({
               ) : (
                 <input
                   required={pendingRequirementByKey.get(input.role)?.requirement.required !== false}
-                  disabled={locked || confirmed || waivedSet.has(input.role)}
+                  disabled={formLocked || waivedSet.has(input.role)}
                   value={values[input.role] ?? ''}
                   onChange={(event) => setValues((previous) => ({ ...previous, [input.role]: event.target.value }))}
                   placeholder="请输入"
@@ -422,7 +465,7 @@ export function Stage2Plan({
                 type="file"
                 accept=".md,.txt,text/markdown,text/plain"
                 multiple={documentInput.multiple}
-                disabled={locked || confirmed || waivedSet.has(documentInput.role)}
+                disabled={formLocked || waivedSet.has(documentInput.role)}
                 onChange={(event) => pickDocuments(
                   documentInput,
                   Array.from(event.currentTarget.files ?? []),
@@ -453,26 +496,26 @@ export function Stage2Plan({
                 <input
                   type="file"
                   accept=".csv,text/csv"
-                  disabled={locked || confirmed || waivedSet.has(datasetInput.role)}
+                  disabled={formLocked || waivedSet.has(datasetInput.role)}
                   onChange={(event) => {
                     void pickDataset(datasetInput.role, event.currentTarget.files?.[0]);
                   }}
                 />
                 <input
                   value={selected?.metadata.rowMeaning ?? ''}
-                  disabled={!selected || locked || confirmed}
+                  disabled={!selected || formLocked}
                   onChange={(event) => editDatasetMetadata(datasetInput.role, 'rowMeaning', event.target.value)}
                   placeholder="一行代表什么，例如：一条用户研究记录"
                 />
                 <input
                   value={selected?.metadata.timeRange ?? ''}
-                  disabled={!selected || locked || confirmed}
+                  disabled={!selected || formLocked}
                   onChange={(event) => editDatasetMetadata(datasetInput.role, 'timeRange', event.target.value)}
                   placeholder="数据时间范围，例如：2026-Q3"
                 />
                 <input
                   value={selected?.metadata.sampling ?? ''}
-                  disabled={!selected || locked || confirmed}
+                  disabled={!selected || formLocked}
                   onChange={(event) => editDatasetMetadata(datasetInput.role, 'sampling', event.target.value)}
                   placeholder="样本或采集方式"
                 />
@@ -483,7 +526,7 @@ export function Stage2Plan({
                 ) : null}
                 {selected && (datasetColumns[datasetInput.role]?.length ?? 0) > 0 ? (
                   <fieldset
-                    disabled={locked || confirmed}
+                    disabled={formLocked}
                     style={{ display: 'grid', gap: 8, margin: '3px 0', padding: 10, border: '1px solid var(--border-soft)', borderRadius: 7 }}
                   >
                     <legend style={{ padding: '0 5px', color: 'var(--text-faint)', fontSize: 12 }}>
@@ -545,7 +588,7 @@ export function Stage2Plan({
                 accept={IMAGE_FILE_ACCEPT}
                 multiple={pu.multiple}
                 aria-describedby="visual-upload-guidance"
-                disabled={locked || confirmed || waivedSet.has(pu.role)}
+                disabled={formLocked || waivedSet.has(pu.role)}
                 onChange={(event) => {
                   pickImages(pu, Array.from(event.currentTarget.files ?? []));
                 }}
@@ -560,13 +603,17 @@ export function Stage2Plan({
       {!locked && !confirmed && (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, marginTop: 18 }}>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn-primary" onClick={confirm} disabled={revising || missingAnswers.length > 0 || missingInputs.length > 0 || (portfolio?.uncoveredRequiredDemandIds.length ?? 0) > 0}>
-              ✓ 确认并继续
+            <button
+              className="btn-primary"
+              onClick={() => { void confirm(); }}
+              disabled={submitting || revising || missingAnswers.length > 0 || missingInputs.length > 0 || (portfolio?.uncoveredRequiredDemandIds.length ?? 0) > 0}
+            >
+              {submitting ? '正在上传并确认…' : '✓ 确认并继续'}
             </button>
             <button
               className="btn-ghost"
               onClick={() => onRevise(revisionInstruction.trim())}
-              disabled={revising || revisionInstruction.trim() === ''}
+              disabled={submitting || revising || revisionInstruction.trim() === ''}
             >
               {revising ? '正在重新生成…' : '重新生成计划'}
             </button>
@@ -574,12 +621,17 @@ export function Stage2Plan({
           <textarea
             value={revisionInstruction}
             onChange={(event) => setRevisionInstruction(event.target.value)}
-            disabled={revising}
+            disabled={submitting || revising}
             placeholder="填写调整要求；可用 $skill-name 指定技能"
             rows={2}
             aria-label="计划调整要求"
             style={{ width: '100%', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', padding: '7px 9px', fontSize: 13, resize: 'vertical' }}
           />
+          {submitError && (
+            <span role="alert" style={{ color: 'var(--danger)', fontSize: 12 }}>
+              {submitError}
+            </span>
+          )}
           {(missingAnswers.length > 0 || missingInputs.length > 0 || (portfolio?.uncoveredRequiredDemandIds.length ?? 0) > 0) && (
             <span role="alert" style={{ color: 'var(--warn)', fontSize: 12 }}>
               {missingAnswers.length > 0 && `请先回答全部确认项：${missingAnswers.map(({ question, key }) => question ?? key).join('、')}`}

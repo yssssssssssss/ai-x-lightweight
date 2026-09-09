@@ -71,6 +71,49 @@ const AUTO_REFRESH_PHASES = new Set<Phase>([
 ]);
 const INITIAL_POLL_DELAY_MS = 2_000;
 const MAX_POLL_DELAY_MS = 16_000;
+const INTAKE_UPLOAD_CONCURRENCY = 3;
+
+interface CachedIntakeUpload {
+  files: readonly File[];
+  metadata: string | null;
+  inputId: string;
+}
+
+interface CachedIntakeConfirmation {
+  planVersionId: string;
+  signature: string;
+  idempotencyKey: string;
+}
+
+function sortedRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function sameFiles(left: readonly File[], right: readonly File[]): boolean {
+  return left.length === right.length && left.every((file, index) => file === right[index]);
+}
+
+async function runIntakeUploads(operations: Array<() => Promise<void>>): Promise<void> {
+  let cursor = 0;
+  const errors: unknown[] = [];
+  async function worker(): Promise<void> {
+    while (cursor < operations.length) {
+      const operation = operations[cursor];
+      cursor += 1;
+      if (!operation) return;
+      try {
+        await operation();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(INTAKE_UPLOAD_CONCURRENCY, operations.length) },
+    () => worker(),
+  ));
+  if (errors.length > 0) throw errors[0];
+}
 
 function planView(
   response: ControlPlanCandidatesResponse,
@@ -166,6 +209,8 @@ export function useTaskFlow() {
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const clarificationSubmission = useRef(createClarificationSubmissionState());
+  const intakeUploadCache = useRef(new Map<string, CachedIntakeUpload>());
+  const intakeConfirmation = useRef<CachedIntakeConfirmation | null>(null);
   const restoreGeneration = useRef(0);
   const [clarificationSubmitting, setClarificationSubmitting] = useState(false);
 
@@ -320,13 +365,20 @@ export function useTaskFlow() {
     };
   }, [currentTaskId, phase, restoreTask]);
 
+  function clearIntakeSubmission(): void {
+    intakeUploadCache.current.clear();
+    intakeConfirmation.current = null;
+  }
+
   async function openTask(taskId: string): Promise<void> {
+    clearIntakeSubmission();
     await restoreTask(taskId);
   }
 
   function reset() {
     restoreGeneration.current += 1;
     clarificationSubmission.current = createClarificationSubmissionState();
+    clearIntakeSubmission();
     setClarificationSubmitting(false);
     localStorage.removeItem(CURRENT_TASK_STORAGE_KEY);
     setPhase('idle');
@@ -359,6 +411,7 @@ export function useTaskFlow() {
   ) {
     restoreGeneration.current += 1;
     clarificationSubmission.current = createClarificationSubmissionState();
+    clearIntakeSubmission();
     setClarificationSubmitting(false);
     localStorage.removeItem(CURRENT_TASK_STORAGE_KEY);
     setPhase('planning');
@@ -467,6 +520,7 @@ export function useTaskFlow() {
     if (!candidatesResp || stateVersion == null) return;
     const candidate = candidatesResp.candidates.find((item) => item.planVersionId === planVersionId);
     if (!candidate) return;
+    clearIntakeSubmission();
     setSelectedCandidate(candidate);
     setPhase('selecting');
     setError('');
@@ -545,14 +599,13 @@ export function useTaskFlow() {
     datasetUploads: DatasetUpload[] = [],
     documentUploads: DocumentUpload[] = [],
     waivedInputKeys: string[] = [],
-  ) {
-    if (!candidatesResp || !selectedCandidate || stateVersion == null) return;
-    if (planRecovery) {
-      setError('当前计划需要重新生成，不能直接确认');
-      setPhase('error');
-      return;
+  ): Promise<void> {
+    if (!candidatesResp || !selectedCandidate || stateVersion == null) {
+      throw new Error('当前计划状态不完整，请重新打开任务');
     }
-    setPhase('executing');
+    if (planRecovery) {
+      throw new Error('当前计划需要重新生成，不能直接确认');
+    }
     setError('');
     try {
       const answers = buildConfirmationAnswers(
@@ -566,68 +619,124 @@ export function useTaskFlow() {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === role);
         if (pendingInput?.kind === 'value') inputValues[role] = value;
       }
+      const taskId = candidatesResp.task.id;
+      const planVersionId = selectedCandidate.planVersionId;
+      const operations: Array<() => Promise<void>> = [];
       for (const upload of visualUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'visual') continue;
-        const uploaded = await api.uploadControlVisuals(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.files,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.visualInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:visual:${upload.role}`;
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === null && sameFiles(cached.files, upload.files)) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlVisuals(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.files,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [...upload.files], metadata: null, inputId: uploaded.visualInputId,
+          });
+          inputValues[upload.role] = uploaded.visualInputId;
+        });
       }
       for (const upload of datasetUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'dataset') continue;
-        const uploaded = await api.uploadControlDataset(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.file,
-          upload.metadata,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.datasetInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:dataset:${upload.role}`;
+          const metadata = JSON.stringify(upload.metadata);
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === metadata && sameFiles(cached.files, [upload.file])) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlDataset(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.file,
+            upload.metadata,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [upload.file], metadata, inputId: uploaded.datasetInputId,
+          });
+          inputValues[upload.role] = uploaded.datasetInputId;
+        });
       }
       for (const upload of documentUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'document') continue;
-        const uploaded = await api.uploadControlDocuments(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.files,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.documentInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:document:${upload.role}`;
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === null && sameFiles(cached.files, upload.files)) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlDocuments(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.files,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [...upload.files], metadata: null, inputId: uploaded.documentInputId,
+          });
+          inputValues[upload.role] = uploaded.documentInputId;
+        });
       }
-      const confirmed = await api.confirmControlPlan(candidatesResp.task.id, {
+      await runIntakeUploads(operations);
+      const confirmationSignature = JSON.stringify({
+        confirmationAnswers: sortedRecord(answers),
+        inputValues: sortedRecord(inputValues),
+        waivedInputKeys: [...waivedInputKeys].sort(),
+      });
+      const cachedConfirmation = intakeConfirmation.current;
+      const confirmationIdempotencyKey = cachedConfirmation?.planVersionId === planVersionId
+        && cachedConfirmation.signature === confirmationSignature
+        ? cachedConfirmation.idempotencyKey
+        : createRequestId();
+      intakeConfirmation.current = {
+        planVersionId,
+        signature: confirmationSignature,
+        idempotencyKey: confirmationIdempotencyKey,
+      };
+      const confirmed = await api.confirmControlPlan(taskId, {
         expectedVersion: stateVersion,
-        planVersionId: selectedCandidate.planVersionId,
+        planVersionId,
         confirmationAnswers: answers,
         inputValues,
         waivedInputKeys,
-        idempotencyKey: createRequestId(),
+        idempotencyKey: confirmationIdempotencyKey,
       });
+      clearIntakeSubmission();
       setStateVersion(confirmed.stateVersion);
       if (confirmed.state === 'ready') {
         setPhase('ready');
       } else if (confirmed.state === 'awaiting_approval') {
         setPhase('awaiting-approval');
       } else {
-        setError(`确认后任务进入未预期状态：${confirmed.state}`);
-        setPhase('error');
+        throw new Error(`确认后任务进入未预期状态：${confirmed.state}`);
       }
     } catch (cause) {
-      setError(message(cause, '确认或执行失败'));
-      setPhase('error');
+      const failureMessage = message(cause, '信息上传或确认失败');
+      setError(failureMessage);
+      setPhase('planned');
+      throw cause instanceof Error ? cause : new Error(failureMessage);
     }
   }
 
   async function revisePlan(revisionInstruction = '按当前输入契约重新生成计划，保持原研究目标和当前候选方向不变。'): Promise<void> {
     if (!currentTaskId || !selectedCandidate || stateVersion == null || revisionSubmitting) return;
+    clearIntakeSubmission();
     setRevisionSubmitting(true);
     setError('');
     try {

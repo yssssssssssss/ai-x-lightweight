@@ -1,6 +1,6 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：In Progress（Phase 0-1 已完成，Phase 2 进行中）
+> 状态：In Progress（Phase 0-2 已完成，Phase 3 进行中）
 > 日期：2026-09-09
 > 基线分支：`main`
 > 实施分支：`feat/skill-intake-follow-up-optimization`
