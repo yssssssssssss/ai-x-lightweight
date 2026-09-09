@@ -1,6 +1,6 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：In Progress（Phase 0 已完成，Phase 1 进行中）
+> 状态：In Progress（Phase 0-1 已完成，Phase 2 进行中）
 > 日期：2026-09-09
 > 基线分支：`main`
 > 实施分支：`feat/skill-intake-follow-up-optimization`
@@ -389,14 +389,7 @@ type SkillInputKind = 'value' | 'document' | 'visual' | 'dataset';
 | `dataset` | 结构化表格 | 单个 `.csv` |
 | `visual` | 本地图片 | JPEG、PNG、WebP |
 
-若一个业务概念同时允许“粘贴简短文字”和“上传文件”，不要把 `kind: value` 与 `acceptedSources: upload` 混用。最小做法是保留原业务 key 作为文件输入，再增加一个可选文字 key，例如：
-
-```text
-user_materials       document
-user_material_notes  value
-```
-
-Skill Prompt 可同时消费两者。这样既保留原材料语义，也让 UI 和执行合同保持确定性。
+若一个业务概念同时允许“粘贴简短文字”和“上传文件”，不要把 `kind: value` 与 `acceptedSources: upload` 混用。首版为每个 key 选择一种权威输入形态：研究目标和短字段使用 `value`，成段研究材料使用 `document`。用户仍可在原始需求中补充短说明；不为同一材料再增加一组 notes/document 平行字段。
 
 ### 7.3 首批修正映射
 
@@ -406,9 +399,9 @@ Skill Prompt 可同时消费两者。这样既保留原材料语义，也让 UI 
 | build-experience-metrics | analytics_dataset | value | dataset，optional |
 | conversion-funnel-analysis | analytics_dataset | value | dataset，optional |
 | feature-adoption-analysis | analytics_dataset | value | dataset，optional |
-| competitive-analysis | user_materials | value/upload 混合 | user_materials=document；增加可选 notes |
-| jobs-to-be-done | user_materials | value/upload 混合 | user_materials=document；增加可选 notes |
-| jobs-to-be-done | qualitative_insights | value/upload 混合 | qualitative_insights=document；增加可选 notes |
+| competitive-analysis | user_materials | value/upload 混合 | document |
+| jobs-to-be-done | user_materials | value/upload 混合 | document |
+| jobs-to-be-done | qualitative_insights | value/upload 混合 | document |
 
 `acceptedSources` 只声明当前平台真正能解析的来源。当前没有历史 Artifact/数据库材料选择器，因此用户文件 requirement 首版只声明 `upload`；不得仅因未来可能复用而提前声明 `database`。Knowledge/Tool 继续只用于已有执行期绑定。
 

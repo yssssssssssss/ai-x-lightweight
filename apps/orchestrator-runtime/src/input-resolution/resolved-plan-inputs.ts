@@ -44,10 +44,16 @@ function mergeRequirement(
   ) {
     throw new PlanInputResolutionError(`requirement ${current.key} has incompatible declarations`);
   }
+  const acceptedSources = current.acceptedSources.filter((source) => (
+    candidate.acceptedSources.includes(source)
+  ));
+  if (acceptedSources.length === 0) {
+    throw new PlanInputResolutionError(`requirement ${current.key} has incompatible accepted sources`);
+  }
   return {
     ...current,
     required: current.required || candidate.required,
-    acceptedSources: [...new Set([...current.acceptedSources, ...candidate.acceptedSources])],
+    acceptedSources,
   };
 }
 

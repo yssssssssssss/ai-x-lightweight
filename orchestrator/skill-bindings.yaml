@@ -60,8 +60,7 @@ skills:
         required: false
         multiple: true
         acceptedSources:
-          - upload
-          - database
+          - conversation
           - tool
         question: 是否有希望优先使用的竞品公开资料？
     required_tools:
@@ -183,6 +182,10 @@ skills:
     enabled: true
     task_types:
       - voc_diagnosis
+    inputs:
+      - analytics_dataset
+    dataset_inputs:
+      - analytics_dataset
     risk_level: low
     composition:
       modes:
@@ -206,6 +209,10 @@ skills:
     task_types:
       - user_research_planning
       - industry_market_analysis
+    inputs:
+      - research_goal
+    dataset_inputs:
+      - analytics_dataset
     required_tools:
       - tavily-web-search
     risk_level: low
@@ -263,6 +270,10 @@ skills:
     task_types:
       - competitive_research
       - industry_market_analysis
+    inputs:
+      - research_goal
+    document_inputs:
+      - user_materials
     input_requirements:
       - key: research_goal
         kind: value
@@ -280,22 +291,19 @@ skills:
         required: false
         multiple: true
         acceptedSources:
-          - upload
-          - database
+          - conversation
           - knowledge
           - tool
         question: 是否有希望纳入分析的竞品公开资料？
       - key: user_materials
-        kind: value
+        kind: document
         label: 补充研究材料
-        description: 用户提供的竞品观察、内部背景或已脱敏研究材料。
+        description: 用户提供的竞品观察、内部背景或研究材料。
         required: false
         multiple: true
         acceptedSources:
-          - conversation
           - upload
-          - database
-        question: 是否有可用于补充竞品判断的研究材料？
+        question: 是否有可用于补充竞品判断的 Markdown 或 TXT 研究材料？
     risk_level: low
     composition:
       modes:
@@ -321,6 +329,10 @@ skills:
     enabled: true
     task_types:
       - user_research_planning
+    inputs:
+      - research_goal
+    dataset_inputs:
+      - analytics_dataset
     risk_level: low
     composition:
       modes:
@@ -344,6 +356,10 @@ skills:
     enabled: true
     task_types:
       - user_research_planning
+    inputs:
+      - research_goal
+    dataset_inputs:
+      - analytics_dataset
     risk_level: low
     composition:
       modes:
@@ -398,27 +414,23 @@ skills:
           - conversation
         question: 这组 Persona 需要支持什么研究或产品决策？
       - key: user_materials
-        kind: value
+        kind: document
         label: 用户研究材料
-        description: 已脱敏的访谈记录、定性发现或用户原话。
+        description: 访谈记录、定性发现或用户原话。
         required: false
         multiple: true
         acceptedSources:
-          - conversation
           - upload
-          - database
-        question: 是否有可用于生成 Persona 的用户研究材料？
+        question: 是否有可用于生成 Persona 的 Markdown 或 TXT 用户研究材料？
       - key: qualitative_insights
-        kind: value
+        kind: document
         label: 已有定性洞察
         description: 已完成的定性主题、洞察或研究结论。
         required: false
         multiple: true
         acceptedSources:
-          - conversation
           - upload
-          - database
-        question: 是否有可以复用的定性洞察？
+        question: 是否有可以复用的 Markdown 或 TXT 定性洞察？
       - key: user_research_dataset
         kind: dataset
         label: 用户研究数据集
@@ -427,10 +439,12 @@ skills:
         multiple: false
         acceptedSources:
           - upload
-          - database
-        question: 是否有可用于支持用户分型的数据集？
+        question: 是否有可用于支持用户分型的 CSV 数据集？
     dataset_inputs:
       - user_research_dataset
+    document_inputs:
+      - user_materials
+      - qualitative_insights
     required_tools:
       - tavily-web-search
     risk_level: low
@@ -607,6 +621,11 @@ skills:
     task_types:
       - user_research_planning
       - industry_market_analysis
+    inputs:
+      - research_goal
+    document_inputs:
+      - user_materials
+      - qualitative_insights
     input_requirements:
       - key: research_goal
         kind: value
@@ -618,27 +637,23 @@ skills:
           - conversation
         question: 需要分析的是哪条需求、功能设想或业务问题？
       - key: user_materials
-        kind: value
+        kind: document
         label: 用户研究材料
-        description: 已脱敏的 Job/Switch 访谈、用户反馈或流失原声。
+        description: Job/Switch 访谈、用户反馈或流失原声。
         required: false
         multiple: true
         acceptedSources:
-          - conversation
           - upload
-          - database
-        question: 是否有可用于验证 Job 的用户研究材料？
+        question: 是否有可用于验证 Job 的 Markdown 或 TXT 用户研究材料？
       - key: qualitative_insights
-        kind: value
+        kind: document
         label: 已有定性洞察
         description: 与当前需求相关的已验证洞察或研究结论。
         required: false
         multiple: true
         acceptedSources:
-          - conversation
           - upload
-          - database
-        question: 是否有可以复用的定性洞察？
+        question: 是否有可以复用的 Markdown 或 TXT 定性洞察？
     required_tools:
       - tavily-web-search
     risk_level: low
@@ -668,6 +683,10 @@ skills:
       - user_research_planning
       - voc_diagnosis
       - industry_market_analysis
+    inputs:
+      - research_goal
+    document_inputs:
+      - user_materials
     risk_level: low
     composition:
       modes:

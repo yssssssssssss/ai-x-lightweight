@@ -405,8 +405,8 @@ export class SkillLoader {
             required: requiredRoles.has(key),
             multiple: kind === 'document' || entry.multiple_visual_inputs?.includes(key) === true,
             acceptedSources: kind === 'value'
-              ? ['conversation', 'upload', 'database'] as const
-              : ['upload', 'database'] as const,
+              ? ['conversation'] as const
+              : ['upload'] as const,
             question: `请提供${label}。`,
           };
         });
