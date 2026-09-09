@@ -158,10 +158,35 @@ test('loads the original Industry package without a platform-rewritten copy', ()
       description: '内部业务材料，用于完成本次分析。',
       required: false,
       multiple: true,
-      acceptedSources: ['upload', 'database'],
+      acceptedSources: ['upload'],
       question: '请提供内部业务材料。',
     },
   );
+});
+
+test('active material Skills expose upload controls that match their declared data shape', () => {
+  const expected = [
+    ['analyze-satisfaction', 'analytics_dataset', 'dataset'],
+    ['build-experience-metrics', 'analytics_dataset', 'dataset'],
+    ['conversion-funnel-analysis', 'analytics_dataset', 'dataset'],
+    ['feature-adoption-analysis', 'analytics_dataset', 'dataset'],
+    ['competitive-analysis', 'user_materials', 'document'],
+    ['generate-persona', 'user_materials', 'document'],
+    ['generate-persona', 'qualitative_insights', 'document'],
+    ['generate-persona', 'user_research_dataset', 'dataset'],
+    ['jobs-to-be-done', 'user_materials', 'document'],
+    ['jobs-to-be-done', 'qualitative_insights', 'document'],
+    ['journey-map', 'user_materials', 'document'],
+  ] as const;
+
+  for (const [skillId, key, kind] of expected) {
+    const requirement = sl.loadNativeRunSpec(skillId).input_requirements.find((item) => item.key === key);
+    assert.deepEqual(
+      requirement && { kind: requirement.kind, acceptedSources: requirement.acceptedSources },
+      { kind, acceptedSources: ['upload'] },
+      `${skillId}.${key}`,
+    );
+  }
 });
 
 test('loadSkillSchemas keeps only the universal output schema outside the Skill package', () => {

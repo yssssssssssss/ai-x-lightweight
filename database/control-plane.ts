@@ -8,6 +8,8 @@ import {
   type CurrentPlanCandidate,
   type ControlRequirementVersion,
   type OrchestrationModeV1,
+  type TaskFollowUpMessageV1,
+  type TaskFollowUpResponse,
 } from '../packages/api-contract/control-workflow.ts';
 import {
   isNativeSkillExecutionPlanV1,
@@ -685,6 +687,37 @@ function controlTaskSummaryFromRow(row: Record<string, unknown>): ControlTaskSum
     state: asString(row.state, 'state') as ControlTaskState,
     createdAt: asDate(row.created_at, 'created_at'),
     updatedAt: asDate(row.updated_at, 'updated_at'),
+  };
+}
+
+function taskFollowUpMessageFromRow(row: Record<string, unknown>): TaskFollowUpMessageV1 {
+  const content = asRecord(row.content);
+  const role = asString(row.sender_type, 'sender_type');
+  const sourceIds = content?.sourceIds;
+  const gaps = content?.gaps;
+  if (
+    content?.version !== 'task-follow-up-message-v1'
+    || (role !== 'user' && role !== 'assistant')
+    || content.role !== role
+    || content.id !== row.id
+    || typeof content.taskId !== 'string'
+    || typeof content.content !== 'string'
+    || !Array.isArray(sourceIds)
+    || sourceIds.some((value) => typeof value !== 'string')
+    || !Array.isArray(gaps)
+    || gaps.some((value) => typeof value !== 'string')
+  ) {
+    throw new Error('task follow-up message is malformed');
+  }
+  return {
+    version: 'task-follow-up-message-v1',
+    id: asString(row.id, 'id'),
+    taskId: content.taskId,
+    role,
+    content: content.content,
+    sourceIds: sourceIds as string[],
+    gaps: gaps as string[],
+    createdAt: asDate(row.created_at, 'created_at').toISOString(),
   };
 }
 
@@ -2823,6 +2856,33 @@ export class ControlPlaneRepository {
     });
   }
 
+  async listTaskFollowUps(input: {
+    taskId: string;
+    ownerUserId: string;
+  }): Promise<TaskFollowUpMessageV1[]> {
+    const connection = await this.database.connect();
+    try {
+      const result = await connection.query(
+        `SELECT message.id, message.sender_type, message.content, message.created_at
+         FROM messages AS message
+         JOIN control_tasks AS task ON task.conversation_id = message.conversation_id
+         JOIN conversations AS conversation ON conversation.id = task.conversation_id
+         WHERE task.id = $1
+           AND task.owner_user_id = $2
+           AND conversation.owner_user_id = $2
+           AND message.content->>'version' = 'task-follow-up-message-v1'
+           AND message.content->>'taskId' = $1::text
+         ORDER BY message.created_at ASC,
+                  CASE message.sender_type WHEN 'user' THEN 0 ELSE 1 END ASC,
+                  message.id ASC`,
+        [input.taskId, input.ownerUserId],
+      );
+      return result.rows.map(taskFollowUpMessageFromRow);
+    } finally {
+      connection.release();
+    }
+  }
+
   async getCommand(taskId: string, commandType: string, idempotencyKey: string): Promise<ControlCommandRecord | null> {
     const connection = await this.database.connect();
     try {
@@ -2836,6 +2896,86 @@ export class ControlPlaneRepository {
     } finally {
       connection.release();
     }
+  }
+
+  async reserveFollowUpCommand(input: {
+    taskId: string;
+    idempotencyKey: string;
+    requestHash: string;
+    expectedVersion: number;
+    actorUserId: string;
+  }): Promise<ControlCommandReservation> {
+    return this.transaction(async (connection) => {
+      const taskResult = await connection.query(
+        `SELECT task.state, task.state_version, task.owner_user_id,
+                conversation.owner_user_id AS conversation_owner_user_id
+         FROM control_tasks AS task
+         JOIN conversations AS conversation ON conversation.id = task.conversation_id
+         WHERE task.id = $1
+         FOR UPDATE OF task`,
+        [input.taskId],
+      );
+      const task = taskResult.rows[0];
+      if (!task) throw new ControlPlaneConflictError(`task ${input.taskId} does not exist`);
+      if (
+        task.owner_user_id !== input.actorUserId
+        || task.conversation_owner_user_id !== input.actorUserId
+      ) throw new ControlPlaneAuthorizationError(`actor cannot control task ${input.taskId}`);
+
+      const existingResult = await connection.query(
+        `SELECT request_hash, command_status, response_json, reservation_expires_at
+         FROM control_commands
+         WHERE task_id = $1 AND command_type = 'report_follow_up' AND idempotency_key = $2
+         FOR UPDATE`,
+        [input.taskId, input.idempotencyKey],
+      );
+      const existing = existingResult.rows[0];
+      if (existing) {
+        if (existing.request_hash !== input.requestHash) return { status: 'conflict' };
+        if (existing.command_status === 'completed') {
+          return { status: 'replay', response: existing.response_json };
+        }
+        const expiresAt = asDate(existing.reservation_expires_at, 'reservation_expires_at');
+        if (expiresAt.getTime() > Date.now()) return { status: 'pending' };
+      }
+
+      const state = asString(task.state, 'state') as ControlTaskState;
+      const stateVersion = asNumber(task.state_version, 'state_version');
+      if (
+        (state !== 'completed' && state !== 'completed_with_gaps')
+        || stateVersion !== input.expectedVersion
+      ) {
+        throw new ControlPlaneConflictError(`task ${input.taskId} has no completed report at version ${input.expectedVersion}`);
+      }
+      const reservationToken = randomUUID();
+      const reservationExpiresAt = new Date(Date.now() + 5 * 60_000);
+      if (existing) {
+        await connection.query(
+          `UPDATE control_commands
+           SET expected_version = $3, state_before = $4, state_after = $4,
+               actor_user_id = $5, reservation_token = $6, reservation_expires_at = $7
+           WHERE task_id = $1 AND idempotency_key = $2
+             AND command_type = 'report_follow_up' AND command_status = 'pending'`,
+          [
+            input.taskId, input.idempotencyKey, input.expectedVersion, state,
+            input.actorUserId, reservationToken, reservationExpiresAt,
+          ],
+        );
+      } else {
+        await connection.query(
+          `INSERT INTO control_commands
+             (task_id, command_type, idempotency_key, request_hash, expected_version,
+              state_before, state_after, response_json, actor_user_id, command_status,
+              reservation_token, reservation_expires_at)
+           VALUES ($1, 'report_follow_up', $2, $3, $4, $5, $5, NULL, $6, 'pending', $7, $8)`,
+          [
+            input.taskId, input.idempotencyKey, input.requestHash, input.expectedVersion,
+            state, input.actorUserId, reservationToken, reservationExpiresAt,
+          ],
+        );
+      }
+      return { status: 'reserved', reservationToken };
+    });
   }
 
   async reserveCommand(input: {
@@ -3532,6 +3672,88 @@ export class ControlPlaneRepository {
         activePlanVersionId: typeof row.active_plan_version_id === 'string' ? row.active_plan_version_id : null,
         currentAttemptId: typeof row.current_attempt_id === 'string' ? row.current_attempt_id : null,
       };
+    });
+  }
+
+  async completeFollowUpCommand(input: {
+    taskId: string;
+    conversationId: string;
+    idempotencyKey: string;
+    requestHash: string;
+    expectedVersion: number;
+    reservationToken: string;
+    state: 'completed' | 'completed_with_gaps';
+    finalReportArtifactId: string;
+    response: TaskFollowUpResponse;
+  }): Promise<void> {
+    await this.transaction(async (connection) => {
+      const task = (await connection.query(
+        `SELECT state, state_version, conversation_id
+         FROM control_tasks WHERE id = $1 FOR UPDATE`,
+        [input.taskId],
+      )).rows[0];
+      if (
+        !task
+        || task.state !== input.state
+        || asNumber(task.state_version, 'state_version') !== input.expectedVersion
+        || task.conversation_id !== input.conversationId
+      ) throw new ControlPlaneConflictError('report follow-up lost the completed Task binding');
+
+      const [userMessage, assistantMessage] = input.response.messages;
+      if (!userMessage || !assistantMessage) {
+        throw new ControlPlaneConflictError('report follow-up response is incomplete');
+      }
+      const inserted = await connection.query(
+        `INSERT INTO messages
+           (id, conversation_id, sender_type, message_type, content, artifact_id, idempotency_key, created_at)
+         VALUES
+           ($1, $3, 'user', 'text', $5, NULL, $7, $9),
+           ($2, $3, 'assistant', 'report', $6, $4, $8, $10)
+         ON CONFLICT (conversation_id, idempotency_key)
+           WHERE idempotency_key IS NOT NULL
+         DO NOTHING
+         RETURNING id`,
+        [
+          userMessage.id,
+          assistantMessage.id,
+          input.conversationId,
+          input.finalReportArtifactId,
+          JSON.stringify(userMessage),
+          JSON.stringify(assistantMessage),
+          `follow-up:${input.idempotencyKey}:user`,
+          `follow-up:${input.idempotencyKey}:assistant`,
+          new Date(userMessage.createdAt),
+          new Date(assistantMessage.createdAt),
+        ],
+      );
+      if (inserted.rows.length !== 2) {
+        throw new ControlPlaneConflictError('report follow-up messages were not committed together');
+      }
+      const completed = await connection.query(
+        `UPDATE control_commands
+         SET state_after = $6, response_json = $7, command_status = 'completed',
+             reservation_token = NULL, reservation_expires_at = NULL
+         WHERE task_id = $1 AND command_type = 'report_follow_up' AND idempotency_key = $2
+           AND request_hash = $3 AND expected_version = $4
+           AND command_status = 'pending' AND reservation_token = $5
+         RETURNING id`,
+        [
+          input.taskId,
+          input.idempotencyKey,
+          input.requestHash,
+          input.expectedVersion,
+          input.reservationToken,
+          input.state,
+          JSON.stringify(input.response),
+        ],
+      );
+      if (!completed.rows[0]) {
+        throw new ControlPlaneConflictError('report follow-up command reservation fence was lost');
+      }
+      await connection.query(
+        `UPDATE conversations SET last_message_at = $2, updated_at = $2 WHERE id = $1`,
+        [input.conversationId, new Date(assistantMessage.createdAt)],
+      );
     });
   }
 

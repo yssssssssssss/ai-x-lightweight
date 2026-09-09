@@ -6,6 +6,7 @@ const theme = new URL('../apps/web/src/theme.css', import.meta.url);
 const workbench = new URL('../apps/web/src/pages/Workbench.tsx', import.meta.url);
 const sidebar = new URL('../apps/web/src/components/Sidebar.tsx', import.meta.url);
 const composer = new URL('../apps/web/src/components/Composer.tsx', import.meta.url);
+const taskFlow = new URL('../apps/web/src/hooks/useTaskFlow.ts', import.meta.url);
 
 test('workbench has one contained scroll chain and a non-scrolling bottom composer', async () => {
   const [css, workbenchSource, composerSource] = await Promise.all([
@@ -70,6 +71,14 @@ test('current conversation renders each user turn before assistant stages and is
 
   const chatColumnRule = css.match(/\.chat-column\s*\{[^}]*\}/u)?.[0] ?? '';
   assert.doesNotMatch(chatColumnRule, /column-reverse|direction:\s*rtl/u);
+});
+
+test('active tasks poll lightweight status and fetch the full task only after change', async () => {
+  const source = await readFile(taskFlow, 'utf8');
+  assert.match(source, /api\.controlTaskStatus\(currentTaskId\)/u);
+  assert.match(source, /signature !== statusSignatureRef\.current/u);
+  assert.match(source, /Math\.min\(delay \* 2, MAX_POLL_DELAY_MS\)/u);
+  assert.match(source, /document\.hidden \? MAX_POLL_DELAY_MS : delay/u);
 });
 
 test('Knowledge configuration drift exposes replan and abort instead of retry', async () => {

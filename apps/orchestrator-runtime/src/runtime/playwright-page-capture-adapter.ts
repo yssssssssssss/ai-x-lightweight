@@ -191,11 +191,17 @@ async function runBounded<T>(
   const cancellation = new Promise<never>((_resolve, reject) => {
     onAbort = () => reject(toolAbortError(toolId, context.signal, context.deadlineAt));
     context.signal.addEventListener('abort', onAbort, { once: true });
-    timer = setTimeout(() => {
+    const rejectAtDeadline = () => {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs > 0) {
+        timer = setTimeout(rejectAtDeadline, remainingMs);
+        return;
+      }
       reject(deadlineAt >= context.deadlineAt
         ? toolAbortError(toolId, context.signal, context.deadlineAt)
         : captureError('navigation_timeout', 'page processing timed out'));
-    }, Math.max(0, deadlineAt - Date.now()));
+    };
+    timer = setTimeout(rejectAtDeadline, Math.max(0, deadlineAt - Date.now()));
     if (context.signal.aborted) onAbort();
   });
   try {

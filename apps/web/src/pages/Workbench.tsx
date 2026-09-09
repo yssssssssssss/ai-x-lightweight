@@ -29,6 +29,7 @@ import { Stage2Plan } from '../components/stages/Stage2Plan.tsx';
 import { Stage3Execute } from '../components/stages/Stage3Execute.tsx';
 import { Stage4Report } from '../components/stages/Stage4Report.tsx';
 import { NativeStage4Report } from '../components/stages/NativeStage4Report.tsx';
+import { TaskFollowUpPanel } from '../components/TaskFollowUpPanel.tsx';
 import { PlanProgressCard } from '../components/PlanningProgressCard.tsx';
 import { reviewedDraftPreviewFromFailure } from '../reviewed-draft-preview.ts';
 import { Labs } from './Labs.tsx';
@@ -94,6 +95,10 @@ export function Workbench({ user, capabilities, onLogout }: { user: User; capabi
     skillResults,
     reportState,
     deliverableError,
+    followUpMessages,
+    followUpLoading,
+    followUpSubmitting,
+    followUpError,
     error,
     progress,
     currentTaskId,
@@ -300,11 +305,20 @@ export function Workbench({ user, capabilities, onLogout }: { user: User; capabi
                       <ErrorCard msg={deliverableError} onRetry={flow.retryDeliverable} retryLabel="重取报告" />
                     )}
                     {finalReport && currentTaskId && (
-                      <NativeStage4Report
-                        taskId={currentTaskId}
-                        finalReport={finalReport}
-                        skillResults={skillResults}
-                      />
+                      <>
+                        <NativeStage4Report
+                          taskId={currentTaskId}
+                          finalReport={finalReport}
+                          skillResults={skillResults}
+                        />
+                        <TaskFollowUpPanel
+                          messages={followUpMessages}
+                          loading={followUpLoading}
+                          submitting={followUpSubmitting}
+                          error={followUpError}
+                          onSubmit={flow.submitFollowUp}
+                        />
+                      </>
                     )}
                   </>
                 )}
@@ -344,11 +358,13 @@ export function Workbench({ user, capabilities, onLogout }: { user: User; capabi
             )}
           </div>
         </div>
-        <Composer
-          disabled={phase === 'loading-task' || phase === 'planning' || phase === 'clarifying' || phase === 'selecting' || phase === 'executing' || phase === 'reviewing' || phase === 'composing-report' || phase === 'awaiting-approval'}
-          multiSkillEnabled={capabilities?.multiSkillPlanWriterEnabled === true}
-          onSubmit={flow.submitInput}
-        />
+        {phase !== 'done' ? (
+          <Composer
+            disabled={phase === 'loading-task' || phase === 'planning' || phase === 'clarifying' || phase === 'selecting' || phase === 'executing' || phase === 'reviewing' || phase === 'composing-report' || phase === 'awaiting-approval'}
+            multiSkillEnabled={capabilities?.multiSkillPlanWriterEnabled === true}
+            onSubmit={flow.submitInput}
+          />
+        ) : null}
       </main>
       )}
     </div>

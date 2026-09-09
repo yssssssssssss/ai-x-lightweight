@@ -149,7 +149,9 @@ export type {
   ControlExecutionResult,
   ControlPlanCandidatesResponse,
   ControlTaskResponse,
+  ControlTaskStatusResponse,
   ControlWorkflowState as ControlTaskState,
+  CreateTaskFollowUpRequest,
   CurrentTaskReadResponse,
   CurrentPlanCandidate,
   ExecutionControlPlanRequest,
@@ -160,6 +162,9 @@ export type {
   ReviseControlPlanResponse,
   SelectControlPlanRequest,
   SelectControlPlanResponse,
+  TaskFollowUpListResponse,
+  TaskFollowUpMessageV1,
+  TaskFollowUpResponse,
 } from '../../../../packages/api-contract/control-workflow.ts';
 export type {
   CapabilityProvenance,
@@ -195,6 +200,8 @@ import type {
   ConfirmControlPlanRequest,
   ControlCommandResponse,
   ControlExecutionResult,
+  ControlTaskStatusResponse,
+  CreateTaskFollowUpRequest,
   CurrentTaskReadResponse,
   ExecutionControlPlanRequest,
   PlanControlTaskRequest,
@@ -203,6 +210,8 @@ import type {
   ReviseControlPlanResponse,
   SelectControlPlanRequest,
   SelectControlPlanResponse,
+  TaskFollowUpListResponse,
+  TaskFollowUpResponse,
 } from '../../../../packages/api-contract/control-workflow.ts';
 import type {
   NativeSkillResult,
@@ -395,6 +404,8 @@ export const api = {
   skills: () => req<{ skills: SkillItem[] }>('/skills'),
   controlTask: (taskId: string) =>
     req<CurrentTaskReadResponse>(`/control-tasks/${taskId}`),
+  controlTaskStatus: (taskId: string) =>
+    req<ControlTaskStatusResponse>(`/control-tasks/${encodeURIComponent(taskId)}/status`),
   selectControlPlan: (taskId: string, body: SelectControlPlanRequest) =>
     req<SelectControlPlanResponse>(`/control-tasks/${taskId}/select`, { method: 'POST', body, headers: { 'Idempotency-Key': body.idempotencyKey } }),
   confirmControlPlan: (taskId: string, body: ConfirmControlPlanRequest) =>
@@ -499,6 +510,16 @@ export const api = {
   },
   controlFinalReport: (taskId: string) =>
     req<ControlFinalReport>(`/control-tasks/${encodeURIComponent(taskId)}/final-report`),
+  controlFollowUps: (taskId: string) =>
+    req<TaskFollowUpListResponse>(`/control-tasks/${encodeURIComponent(taskId)}/follow-ups`),
+  createControlFollowUp: (
+    taskId: string,
+    body: CreateTaskFollowUpRequest,
+    idempotencyKey: string,
+  ) => req<TaskFollowUpResponse>(
+    `/control-tasks/${encodeURIComponent(taskId)}/follow-ups`,
+    { method: 'POST', body, headers: { 'Idempotency-Key': idempotencyKey } },
+  ),
   controlSkillResults: (taskId: string) =>
     req<{ results: NativeSkillResult[] }>(`/control-tasks/${encodeURIComponent(taskId)}/skill-results`),
   controlFinalReportHtml: async (taskId: string): Promise<ControlHtmlBundleResponse> => {

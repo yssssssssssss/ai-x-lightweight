@@ -105,9 +105,12 @@ function configuredRoots(): string[] {
 }
 
 export class InstalledSkillCatalog {
+  private snapshot: InstalledSkillCatalogSnapshot | null = null;
+
   constructor(private readonly roots?: readonly string[]) {}
 
   scan(): InstalledSkillCatalogSnapshot {
+    if (this.snapshot) return this.snapshot;
     const roots = this.roots ?? configuredRoots();
     const packages = roots.flatMap(findPackages).map((rootPath) => inspectSkillPackage({ rootPath }));
     const ids = new Set<string>();
@@ -131,7 +134,8 @@ export class InstalledSkillCatalog {
     const catalogHash = digest(skills.map(({ id, readiness, package: snapshot }) => (
       `${id}\0${readiness}\0${snapshot.packageHash}\n`
     )).join(''));
-    return { catalogHash, skills };
+    this.snapshot = { catalogHash, skills };
+    return this.snapshot;
   }
 
   get(id: string): InstalledSkill | null {

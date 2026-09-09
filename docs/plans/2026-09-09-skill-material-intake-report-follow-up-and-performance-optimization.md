@@ -1,8 +1,9 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：Proposed，待分阶段实施
+> 状态：In Progress（Phase 0-4 已完成，Phase 5 等待用户人工验收）
 > 日期：2026-09-09
 > 基线分支：`main`
+> 实施分支：`feat/skill-intake-follow-up-optimization`
 > 基线提交：`b22b583`
 > 适用范围：新建 Current Task；`single_skill`、`multi_skill`
 > 关联基线：ADR-0013、ADR-0014、统一 Intake/Renderer 方案
@@ -338,13 +339,16 @@ Secrets 已注入，但 GitHub-hosted Runner 上第一条 Gateway 调用失败�
 - DNS、TLS、出口 IP 或认证是否受限；
 - 失败是连接、认证、模型路由还是 Actual Model drift。
 
-如果 Gateway 是内网能力：
+如果 Gateway 是内网能力，本项目当前默认：
 
 - 普通 `Quality` 继续使用 Mock/Fake；
-- 真实 Provider Smoke 放到受保护的 self-hosted Runner 或人工触发环境；
+- 真实 Provider Smoke 只在本地内网受控执行；
+- 仅执行一个主路径和一个第二路径，不建设 self-hosted Runner；
 - `ALLOW_REAL_PROVIDER=1` 继续只在命令级注入；
 - 不把真实 Provider 失败伪装为 Quality 成功；
 - 不在公网 Runner 上盲目重试。
+
+未来确有持续自动化需求时，再单独评估 self-hosted Runner，不在本阶段预建。
 
 ### 6.3 Phase 0 验收
 
@@ -385,14 +389,7 @@ type SkillInputKind = 'value' | 'document' | 'visual' | 'dataset';
 | `dataset` | 结构化表格 | 单个 `.csv` |
 | `visual` | 本地图片 | JPEG、PNG、WebP |
 
-若一个业务概念同时允许“粘贴简短文字”和“上传文件”，不要把 `kind: value` 与 `acceptedSources: upload` 混用。最小做法是保留原业务 key 作为文件输入，再增加一个可选文字 key，例如：
-
-```text
-user_materials       document
-user_material_notes  value
-```
-
-Skill Prompt 可同时消费两者。这样既保留原材料语义，也让 UI 和执行合同保持确定性。
+若一个业务概念同时允许“粘贴简短文字”和“上传文件”，不要把 `kind: value` 与 `acceptedSources: upload` 混用。首版为每个 key 选择一种权威输入形态：研究目标和短字段使用 `value`，成段研究材料使用 `document`。用户仍可在原始需求中补充短说明；不为同一材料再增加一组 notes/document 平行字段。
 
 ### 7.3 首批修正映射
 
@@ -402,9 +399,9 @@ Skill Prompt 可同时消费两者。这样既保留原材料语义，也让 UI 
 | build-experience-metrics | analytics_dataset | value | dataset，optional |
 | conversion-funnel-analysis | analytics_dataset | value | dataset，optional |
 | feature-adoption-analysis | analytics_dataset | value | dataset，optional |
-| competitive-analysis | user_materials | value/upload 混合 | user_materials=document；增加可选 notes |
-| jobs-to-be-done | user_materials | value/upload 混合 | user_materials=document；增加可选 notes |
-| jobs-to-be-done | qualitative_insights | value/upload 混合 | qualitative_insights=document；增加可选 notes |
+| competitive-analysis | user_materials | value/upload 混合 | document |
+| jobs-to-be-done | user_materials | value/upload 混合 | document |
+| jobs-to-be-done | qualitative_insights | value/upload 混合 | document |
 
 `acceptedSources` 只声明当前平台真正能解析的来源。当前没有历史 Artifact/数据库材料选择器，因此用户文件 requirement 首版只声明 `upload`；不得仅因未来可能复用而提前声明 `database`。Knowledge/Tool 继续只用于已有执行期绑定。
 
@@ -540,7 +537,7 @@ interface IntakeItemState {
 - 任意文件再次上传；
 - 自动把“重做”解释成不可逆执行。
 
-用户需要新事实、补材料或重跑时，UI 明确提供“创建修订任务”。
+用户需要新事实、补材料或重跑时，回答与 UI 明确提示改用“新任务”入口；首版不自动携带原任务创建修订链。
 
 ### 9.2 API
 
@@ -687,7 +684,7 @@ interface TaskFollowUpAnswerV1 {
 - assistant message 的 `artifact_id` 指向本轮依据的 Final Report Artifact；
 - 使用现有 control command reservation 保证 LLM 调用幂等；
 - GET 接口只返回 `content.taskId` 等于当前 task 的 follow-up message；
-- `listMessages` 增加 `created_at`，不迁移旧消息；
+- 使用任务级只读查询返回 `created_at`，不改变通用 `listMessages` 合同；
 - 历史非 follow-up message 不进入任务追问 UI。
 
 当真实使用量证明 JSONB taskId 查询成为瓶颈后，再评估专用列或索引；首版不提前迁移。
@@ -707,7 +704,7 @@ interface TaskFollowUpAnswerV1 {
 UI 必须明确：
 
 - “发送”是解释当前报告；
-- “创建修订任务”会带上原 task ID 和用户的新要求创建新任务；
+- 新事实、补材料或重跑使用左侧“新任务”入口；
 - 原报告不会被追问修改；
 - 回答中的 Source ID 可定位到当前报告来源；
 - 页面刷新后消息仍存在。
@@ -717,6 +714,10 @@ UI 必须明确：
 由 §15 用四类测试覆盖：正常多轮与刷新恢复、owner/任务状态边界、幂等与 Source 子集、请求新研究时转为修订任务。既有 Final Report 和 Artifact 测试继续证明报告不可变；不新增 LLM Reviewer 或内容打分测试。
 
 ## 10. Phase 4：性能优化
+
+本轮已实现：轻量 Task Status API、仅状态变化时读取完整 Task、无变化轮询退避、页面隐藏降频、visual 入口 12 文件边界，以及 Skill Catalog 进程级快照缓存。
+
+以下第二阶段优化暂不实施：multipart 临时文件流式落盘、CSV 增量画像、模型图片派生和 Single 报告响应裁剪。当前没有压力数据或 Gateway 图片参数支持这些额外复杂度；它们保留为出现实际内存、延迟或模型限制证据后的定向优化，不阻塞本轮完成。
 
 ### 10.1 轻量状态读取
 
@@ -891,9 +892,10 @@ GET /api/control-tasks/:taskId/status
 ### Phase 0
 
 - `.github/workflows/ci.yml`
-- 真实 Smoke Workflow（如需要，从 CI 拆为一个受保护 Workflow）
 - `tests/playwright-page-capture-adapter.test.ts`
 - 相关 deadline adapter 实现
+
+真实 Smoke 继续复用本地命令，不新增 GitHub Workflow。
 
 ### Phase 1
 
@@ -1068,7 +1070,7 @@ Phase 合并前       pnpm quality（一次）
 | 状态轮询漏进度 | status 返回 step 摘要，变化后拉完整 Task |
 | Catalog 缓存看不到新 Skill | 生产通过重启生效，符合不可变发布模型 |
 | 图片派生损失细节 | 原图保留；阈值以视觉 Smoke 冻结 |
-| 公网 CI 无法访问 Gateway | 使用受保护 self-hosted/manual 环境 |
+| 公网 CI 无法访问 Gateway | 普通 CI 不运行真实调用；在本地内网受控执行两条 Smoke |
 
 ## 19. 明确非目标
 

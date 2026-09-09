@@ -90,6 +90,19 @@ export interface ControlTaskResponse {
   orchestrationMode?: OrchestrationModeV1 | null;
 }
 
+export interface ControlTaskStatusResponse {
+  taskId: string;
+  state: ControlWorkflowState;
+  stateVersion: number;
+  currentAttemptId: string | null;
+  executionSteps: Array<{
+    stepNo: number;
+    state: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+  }>;
+}
+
 export interface CreateControlTaskRequest {
   originalInput: string;
   taskType?: string;
@@ -186,6 +199,31 @@ export interface ResumeControlPlanRequest {
 export interface ControlCommandResponse {
   state: ControlWorkflowState;
   stateVersion: number;
+}
+
+export const TASK_FOLLOW_UP_MESSAGE_VERSION = 'task-follow-up-message-v1' as const;
+
+export interface TaskFollowUpMessageV1 {
+  version: typeof TASK_FOLLOW_UP_MESSAGE_VERSION;
+  id: string;
+  taskId: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sourceIds: string[];
+  gaps: string[];
+  createdAt: string;
+}
+
+export interface CreateTaskFollowUpRequest {
+  message: string;
+}
+
+export interface TaskFollowUpResponse {
+  messages: TaskFollowUpMessageV1[];
+}
+
+export interface TaskFollowUpListResponse {
+  messages: TaskFollowUpMessageV1[];
 }
 
 export type ControlApprovalDecision = 'pending' | 'approved' | 'rejected';

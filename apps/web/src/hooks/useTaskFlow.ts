@@ -18,6 +18,7 @@ import {
   type OrchestrationModeV1,
   type PlanProgress,
   type PlanResponse,
+  type TaskFollowUpMessageV1,
   type DatasetUpload,
   type DocumentUpload,
   type VisualUpload,
@@ -71,6 +72,63 @@ const AUTO_REFRESH_PHASES = new Set<Phase>([
 ]);
 const INITIAL_POLL_DELAY_MS = 2_000;
 const MAX_POLL_DELAY_MS = 16_000;
+const INTAKE_UPLOAD_CONCURRENCY = 3;
+
+function taskStatusSignature(input: {
+  state: string;
+  stateVersion: number;
+  currentAttemptId: string | null;
+  executionSteps: ReadonlyArray<{ stepNo: number; state: string }>;
+}): string {
+  return JSON.stringify({
+    state: input.state,
+    stateVersion: input.stateVersion,
+    currentAttemptId: input.currentAttemptId,
+    executionSteps: input.executionSteps.map(({ stepNo, state }) => [stepNo, state]),
+  });
+}
+
+interface CachedIntakeUpload {
+  files: readonly File[];
+  metadata: string | null;
+  inputId: string;
+}
+
+interface CachedIntakeConfirmation {
+  planVersionId: string;
+  signature: string;
+  idempotencyKey: string;
+}
+
+function sortedRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)));
+}
+
+function sameFiles(left: readonly File[], right: readonly File[]): boolean {
+  return left.length === right.length && left.every((file, index) => file === right[index]);
+}
+
+async function runIntakeUploads(operations: Array<() => Promise<void>>): Promise<void> {
+  let cursor = 0;
+  const errors: unknown[] = [];
+  async function worker(): Promise<void> {
+    while (cursor < operations.length) {
+      const operation = operations[cursor];
+      cursor += 1;
+      if (!operation) return;
+      try {
+        await operation();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(INTAKE_UPLOAD_CONCURRENCY, operations.length) },
+    () => worker(),
+  ));
+  if (errors.length > 0) throw errors[0];
+}
 
 function planView(
   response: ControlPlanCandidatesResponse,
@@ -158,6 +216,10 @@ export function useTaskFlow() {
   const [skillResults, setSkillResults] = useState<NativeSkillResult[]>([]);
   const [reportState, setReportState] = useState<ReportState>('idle');
   const [deliverableError, setDeliverableError] = useState('');
+  const [followUpMessages, setFollowUpMessages] = useState<TaskFollowUpMessageV1[]>([]);
+  const [followUpLoading, setFollowUpLoading] = useState(false);
+  const [followUpSubmitting, setFollowUpSubmitting] = useState(false);
+  const [followUpError, setFollowUpError] = useState('');
   const [error, setError] = useState('');
   const [progress, setProgress] = useState<PlanProgress[]>([]);
   const [approvalRequirements, setApprovalRequirements] = useState<ControlApprovalRequirement[]>([]);
@@ -166,6 +228,9 @@ export function useTaskFlow() {
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
   const clarificationSubmission = useRef(createClarificationSubmissionState());
+  const intakeUploadCache = useRef(new Map<string, CachedIntakeUpload>());
+  const intakeConfirmation = useRef<CachedIntakeConfirmation | null>(null);
+  const statusSignatureRef = useRef('');
   const restoreGeneration = useRef(0);
   const [clarificationSubmitting, setClarificationSubmitting] = useState(false);
 
@@ -175,6 +240,26 @@ export function useTaskFlow() {
     setExecutionSteps(executionStepsToExecLog(current.executionSteps));
     setExecutionPlanSteps(executionPlanStepsForTask(current));
   }
+
+  const loadTaskFollowUps = useCallback(async (
+    taskId: string,
+    generation?: number,
+  ): Promise<void> => {
+    setFollowUpLoading(true);
+    setFollowUpError('');
+    try {
+      const response = await api.controlFollowUps(taskId);
+      if (generation !== undefined && generation !== restoreGeneration.current) return;
+      setFollowUpMessages(response.messages);
+    } catch (cause) {
+      if (generation !== undefined && generation !== restoreGeneration.current) return;
+      setFollowUpError(message(cause, '报告追问记录加载失败'));
+    } finally {
+      if (generation === undefined || generation === restoreGeneration.current) {
+        setFollowUpLoading(false);
+      }
+    }
+  }, []);
 
   async function loadDeliverable(taskId: string): Promise<void> {
     setReportState('loading');
@@ -187,6 +272,7 @@ export function useTaskFlow() {
       setFinalReport(loadedFinalReport);
       setSkillResults(loadedSkillResults.results);
       setReportState('ready');
+      await loadTaskFollowUps(taskId);
     } catch (cause) {
       setDeliverableError(message(cause, '报告加载失败'));
       setReportState('report-loading-error');
@@ -218,12 +304,22 @@ export function useTaskFlow() {
     setExecutionPlanSteps(executionPlanStepsForTask(current));
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
     setProgress([]);
     setApprovalRequirements(current.approvalRequirements ?? []);
     setPlanRecovery(current.planRecovery ?? null);
+    statusSignatureRef.current = taskStatusSignature({
+      state: current.task.state,
+      stateVersion: current.task.stateVersion,
+      currentAttemptId: current.task.currentAttemptId,
+      executionSteps: current.executionSteps,
+    });
 
     const { state, stateVersion: restoredStateVersion, currentAttemptId } = current.task;
     if (hydrated.phase === 'paused') {
@@ -265,12 +361,13 @@ export function useTaskFlow() {
       setFinalReport(restoredFinalReport);
       setSkillResults(restoredSkillResults.results);
       setReportState('ready');
+      await loadTaskFollowUps(current.task.id, generation);
     } catch (cause) {
       if (generation !== restoreGeneration.current) return;
       setDeliverableError(message(cause, '报告加载失败'));
       setReportState('report-loading-error');
     }
-  }, []);
+  }, [loadTaskFollowUps]);
 
   const restoreTask = useCallback(async (
     taskId: string,
@@ -308,10 +405,21 @@ export function useTaskFlow() {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let delay = INITIAL_POLL_DELAY_MS;
     const poll = async (): Promise<void> => {
-      const refreshed = await restoreTask(currentTaskId, { loading: false, silent: true });
+      try {
+        const status = await api.controlTaskStatus(currentTaskId);
+        if (cancelled) return;
+        const signature = taskStatusSignature(status);
+        if (signature !== statusSignatureRef.current) {
+          const refreshed = await restoreTask(currentTaskId, { loading: false, silent: true });
+          delay = refreshed ? INITIAL_POLL_DELAY_MS : Math.min(delay * 2, MAX_POLL_DELAY_MS);
+        } else {
+          delay = Math.min(delay * 2, MAX_POLL_DELAY_MS);
+        }
+      } catch {
+        delay = Math.min(delay * 2, MAX_POLL_DELAY_MS);
+      }
       if (cancelled) return;
-      delay = refreshed ? INITIAL_POLL_DELAY_MS : Math.min(delay * 2, MAX_POLL_DELAY_MS);
-      timer = setTimeout(() => { void poll(); }, delay);
+      timer = setTimeout(() => { void poll(); }, document.hidden ? MAX_POLL_DELAY_MS : delay);
     };
     timer = setTimeout(() => { void poll(); }, delay);
     return () => {
@@ -320,13 +428,21 @@ export function useTaskFlow() {
     };
   }, [currentTaskId, phase, restoreTask]);
 
+  function clearIntakeSubmission(): void {
+    intakeUploadCache.current.clear();
+    intakeConfirmation.current = null;
+  }
+
   async function openTask(taskId: string): Promise<void> {
+    clearIntakeSubmission();
     await restoreTask(taskId);
   }
 
   function reset() {
     restoreGeneration.current += 1;
+    statusSignatureRef.current = '';
     clarificationSubmission.current = createClarificationSubmissionState();
+    clearIntakeSubmission();
     setClarificationSubmitting(false);
     localStorage.removeItem(CURRENT_TASK_STORAGE_KEY);
     setPhase('idle');
@@ -343,6 +459,10 @@ export function useTaskFlow() {
     setExecutionPlanSteps([]);
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
@@ -358,7 +478,9 @@ export function useTaskFlow() {
     orchestrationMode: OrchestrationModeV1 = 'single_skill',
   ) {
     restoreGeneration.current += 1;
+    statusSignatureRef.current = '';
     clarificationSubmission.current = createClarificationSubmissionState();
+    clearIntakeSubmission();
     setClarificationSubmitting(false);
     localStorage.removeItem(CURRENT_TASK_STORAGE_KEY);
     setPhase('planning');
@@ -376,6 +498,10 @@ export function useTaskFlow() {
     setExecutionPlanSteps([]);
     setFinalReport(null);
     setSkillResults([]);
+    setFollowUpMessages([]);
+    setFollowUpLoading(false);
+    setFollowUpSubmitting(false);
+    setFollowUpError('');
     setReportState('idle');
     setDeliverableError('');
     setError('');
@@ -467,6 +593,7 @@ export function useTaskFlow() {
     if (!candidatesResp || stateVersion == null) return;
     const candidate = candidatesResp.candidates.find((item) => item.planVersionId === planVersionId);
     if (!candidate) return;
+    clearIntakeSubmission();
     setSelectedCandidate(candidate);
     setPhase('selecting');
     setError('');
@@ -545,14 +672,13 @@ export function useTaskFlow() {
     datasetUploads: DatasetUpload[] = [],
     documentUploads: DocumentUpload[] = [],
     waivedInputKeys: string[] = [],
-  ) {
-    if (!candidatesResp || !selectedCandidate || stateVersion == null) return;
-    if (planRecovery) {
-      setError('当前计划需要重新生成，不能直接确认');
-      setPhase('error');
-      return;
+  ): Promise<void> {
+    if (!candidatesResp || !selectedCandidate || stateVersion == null) {
+      throw new Error('当前计划状态不完整，请重新打开任务');
     }
-    setPhase('executing');
+    if (planRecovery) {
+      throw new Error('当前计划需要重新生成，不能直接确认');
+    }
     setError('');
     try {
       const answers = buildConfirmationAnswers(
@@ -566,68 +692,124 @@ export function useTaskFlow() {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === role);
         if (pendingInput?.kind === 'value') inputValues[role] = value;
       }
+      const taskId = candidatesResp.task.id;
+      const planVersionId = selectedCandidate.planVersionId;
+      const operations: Array<() => Promise<void>> = [];
       for (const upload of visualUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'visual') continue;
-        const uploaded = await api.uploadControlVisuals(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.files,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.visualInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:visual:${upload.role}`;
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === null && sameFiles(cached.files, upload.files)) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlVisuals(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.files,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [...upload.files], metadata: null, inputId: uploaded.visualInputId,
+          });
+          inputValues[upload.role] = uploaded.visualInputId;
+        });
       }
       for (const upload of datasetUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'dataset') continue;
-        const uploaded = await api.uploadControlDataset(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.file,
-          upload.metadata,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.datasetInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:dataset:${upload.role}`;
+          const metadata = JSON.stringify(upload.metadata);
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === metadata && sameFiles(cached.files, [upload.file])) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlDataset(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.file,
+            upload.metadata,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [upload.file], metadata, inputId: uploaded.datasetInputId,
+          });
+          inputValues[upload.role] = uploaded.datasetInputId;
+        });
       }
       for (const upload of documentUploads) {
         const pendingInput = selectedCandidate.pendingInputs.find((input) => input.role === upload.role);
         if (pendingInput?.kind !== 'document') continue;
-        const uploaded = await api.uploadControlDocuments(
-          candidatesResp.task.id,
-          selectedCandidate.planVersionId,
-          upload.role,
-          upload.files,
-          createRequestId(),
-        );
-        inputValues[upload.role] = uploaded.documentInputId;
+        operations.push(async () => {
+          const cacheKey = `${planVersionId}:document:${upload.role}`;
+          const cached = intakeUploadCache.current.get(cacheKey);
+          if (cached && cached.metadata === null && sameFiles(cached.files, upload.files)) {
+            inputValues[upload.role] = cached.inputId;
+            return;
+          }
+          const uploaded = await api.uploadControlDocuments(
+            taskId,
+            planVersionId,
+            upload.role,
+            upload.files,
+            createRequestId(),
+          );
+          intakeUploadCache.current.set(cacheKey, {
+            files: [...upload.files], metadata: null, inputId: uploaded.documentInputId,
+          });
+          inputValues[upload.role] = uploaded.documentInputId;
+        });
       }
-      const confirmed = await api.confirmControlPlan(candidatesResp.task.id, {
+      await runIntakeUploads(operations);
+      const confirmationSignature = JSON.stringify({
+        confirmationAnswers: sortedRecord(answers),
+        inputValues: sortedRecord(inputValues),
+        waivedInputKeys: [...waivedInputKeys].sort(),
+      });
+      const cachedConfirmation = intakeConfirmation.current;
+      const confirmationIdempotencyKey = cachedConfirmation?.planVersionId === planVersionId
+        && cachedConfirmation.signature === confirmationSignature
+        ? cachedConfirmation.idempotencyKey
+        : createRequestId();
+      intakeConfirmation.current = {
+        planVersionId,
+        signature: confirmationSignature,
+        idempotencyKey: confirmationIdempotencyKey,
+      };
+      const confirmed = await api.confirmControlPlan(taskId, {
         expectedVersion: stateVersion,
-        planVersionId: selectedCandidate.planVersionId,
+        planVersionId,
         confirmationAnswers: answers,
         inputValues,
         waivedInputKeys,
-        idempotencyKey: createRequestId(),
+        idempotencyKey: confirmationIdempotencyKey,
       });
+      clearIntakeSubmission();
       setStateVersion(confirmed.stateVersion);
       if (confirmed.state === 'ready') {
         setPhase('ready');
       } else if (confirmed.state === 'awaiting_approval') {
         setPhase('awaiting-approval');
       } else {
-        setError(`确认后任务进入未预期状态：${confirmed.state}`);
-        setPhase('error');
+        throw new Error(`确认后任务进入未预期状态：${confirmed.state}`);
       }
     } catch (cause) {
-      setError(message(cause, '确认或执行失败'));
-      setPhase('error');
+      const failureMessage = message(cause, '信息上传或确认失败');
+      setError(failureMessage);
+      setPhase('planned');
+      throw cause instanceof Error ? cause : new Error(failureMessage);
     }
   }
 
   async function revisePlan(revisionInstruction = '按当前输入契约重新生成计划，保持原研究目标和当前候选方向不变。'): Promise<void> {
     if (!currentTaskId || !selectedCandidate || stateVersion == null || revisionSubmitting) return;
+    clearIntakeSubmission();
     setRevisionSubmitting(true);
     setError('');
     try {
@@ -720,6 +902,38 @@ export function useTaskFlow() {
     }
   }
 
+  async function submitFollowUp(content: string): Promise<boolean> {
+    if (!currentTaskId || !finalReport || phase !== 'done' || followUpSubmitting) return false;
+    const taskId = currentTaskId;
+    const generation = restoreGeneration.current;
+    setFollowUpSubmitting(true);
+    setFollowUpError('');
+    try {
+      const response = await api.createControlFollowUp(
+        taskId,
+        { message: content },
+        createRequestId(),
+      );
+      if (generation !== restoreGeneration.current) return false;
+      setFollowUpMessages((previous) => {
+        const byId = new Map(previous.map((item) => [item.id, item]));
+        for (const item of response.messages) byId.set(item.id, item);
+        return [...byId.values()].sort((left, right) => (
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id)
+        ));
+      });
+      return true;
+    } catch (cause) {
+      if (generation !== restoreGeneration.current) return false;
+      setFollowUpError(message(cause, '报告追问失败'));
+      return false;
+    } finally {
+      if (generation === restoreGeneration.current) {
+        setFollowUpSubmitting(false);
+      }
+    }
+  }
+
   function retryDeliverable() {
     if (currentTaskId) void loadDeliverable(currentTaskId);
   }
@@ -744,6 +958,10 @@ export function useTaskFlow() {
     skillResults,
     reportState,
     deliverableError,
+    followUpMessages,
+    followUpLoading,
+    followUpSubmitting,
+    followUpError,
     error,
     progress,
     currentTaskId,
@@ -762,6 +980,7 @@ export function useTaskFlow() {
     startExecution,
     cancelExecution,
     resumeStep,
+    submitFollowUp,
     retryDeliverable,
   };
 }
