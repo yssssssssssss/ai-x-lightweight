@@ -1,8 +1,9 @@
 # Skill 材料问询、报告追问与运行性能优化方案
 
-> 状态：Proposed，待分阶段实施
+> 状态：In Progress（Phase 0 已完成，Phase 1 进行中）
 > 日期：2026-09-09
 > 基线分支：`main`
+> 实施分支：`feat/skill-intake-follow-up-optimization`
 > 基线提交：`b22b583`
 > 适用范围：新建 Current Task；`single_skill`、`multi_skill`
 > 关联基线：ADR-0013、ADR-0014、统一 Intake/Renderer 方案
@@ -338,13 +339,16 @@ Secrets 已注入，但 GitHub-hosted Runner 上第一条 Gateway 调用失败�
 - DNS、TLS、出口 IP 或认证是否受限；
 - 失败是连接、认证、模型路由还是 Actual Model drift。
 
-如果 Gateway 是内网能力：
+如果 Gateway 是内网能力，本项目当前默认：
 
 - 普通 `Quality` 继续使用 Mock/Fake；
-- 真实 Provider Smoke 放到受保护的 self-hosted Runner 或人工触发环境；
+- 真实 Provider Smoke 只在本地内网受控执行；
+- 仅执行一个主路径和一个第二路径，不建设 self-hosted Runner；
 - `ALLOW_REAL_PROVIDER=1` 继续只在命令级注入；
 - 不把真实 Provider 失败伪装为 Quality 成功；
 - 不在公网 Runner 上盲目重试。
+
+未来确有持续自动化需求时，再单独评估 self-hosted Runner，不在本阶段预建。
 
 ### 6.3 Phase 0 验收
 
@@ -891,9 +895,10 @@ GET /api/control-tasks/:taskId/status
 ### Phase 0
 
 - `.github/workflows/ci.yml`
-- 真实 Smoke Workflow（如需要，从 CI 拆为一个受保护 Workflow）
 - `tests/playwright-page-capture-adapter.test.ts`
 - 相关 deadline adapter 实现
+
+真实 Smoke 继续复用本地命令，不新增 GitHub Workflow。
 
 ### Phase 1
 
@@ -1068,7 +1073,7 @@ Phase 合并前       pnpm quality（一次）
 | 状态轮询漏进度 | status 返回 step 摘要，变化后拉完整 Task |
 | Catalog 缓存看不到新 Skill | 生产通过重启生效，符合不可变发布模型 |
 | 图片派生损失细节 | 原图保留；阈值以视觉 Smoke 冻结 |
-| 公网 CI 无法访问 Gateway | 使用受保护 self-hosted/manual 环境 |
+| 公网 CI 无法访问 Gateway | 普通 CI 不运行真实调用；在本地内网受控执行两条 Smoke |
 
 ## 19. 明确非目标
 

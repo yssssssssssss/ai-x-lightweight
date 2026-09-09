@@ -182,9 +182,9 @@ pnpm build
 git diff --check
 ```
 
-普通测试固定使用 mock/fake，不调用真实 Provider。
+普通测试固定使用 mock/fake，不调用真实 Provider。GitHub-hosted Quality 不运行内网 Gateway Smoke。
 
-真实 Smoke 必须显式命令级开启：
+真实 Smoke 仅在能够访问 Gateway 的本地内网环境显式、命令级开启：
 
 ```bash
 ALLOW_REAL_PROVIDER=1 \

@@ -699,18 +699,34 @@ test('adapter enforces browser controls and returns bytes only in the in-memory 
   assert.deepEqual(gate.stats(), { active: 0, queued: 0 });
 });
 
-test('a launch that ignores the Tool deadline returns and quarantines the Gate slot', { timeout: 500 }, async () => {
+test('a launch that ignores the Tool deadline returns and quarantines the Gate slot', { timeout: 1_000 }, async (t) => {
+  const realNow = Date.now.bind(Date);
+  let deadlineAt = 0;
+  let launchStarted = false;
+  let injectedEarlyRead = false;
+  t.mock.method(Date, 'now', () => {
+    const now = realNow();
+    if (launchStarted && !injectedEarlyRead && deadlineAt > 0 && now >= deadlineAt) {
+      injectedEarlyRead = true;
+      return deadlineAt - 1;
+    }
+    return now;
+  });
   const gate = new BrowserExecutionGate({ maxActive: 1, maxQueued: 0, queueTimeoutMs: 1 });
   const adapter = new PlaywrightPageCaptureAdapter({
     gate,
     launcher: {
-      launch: async () => new Promise<never>(() => {}),
+      launch: async () => {
+        launchStarted = true;
+        return new Promise<never>(() => {});
+      },
     } as unknown as PlaywrightLauncher,
     resolveHost: async () => ['93.184.216.34'],
     getEffectiveUid: () => 501,
   });
   const context = invocationContext();
-  context.deadlineAt = Date.now() + 20;
+  deadlineAt = realNow() + 20;
+  context.deadlineAt = deadlineAt;
 
   const error = await toolError(adapter.invoke({
     toolId: manifest.id,
@@ -719,6 +735,7 @@ test('a launch that ignores the Tool deadline returns and quarantines the Gate s
     input: { pages: [{ url: 'https://example.com/product' }] },
   }));
 
+  assert.equal(injectedEarlyRead, true);
   assert.equal(error.kind, 'safety');
   assert.equal(error.details.primaryKind, 'timeout');
   assert.equal(error.details.abortReason, 'deadline_exceeded');

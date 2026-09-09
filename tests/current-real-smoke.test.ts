@@ -1251,8 +1251,9 @@ test('current real smoke receipts and machine evidence never expose secrets or r
   }
 });
 
-test('environment documentation and CI expose an explicit current real smoke gate', () => {
+test('environment documentation keeps real smoke explicit and outside hosted CI', () => {
   const envExample = readFileSync(join(process.cwd(), '.env.example'), 'utf8');
+  const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8');
   const ci = readFileSync(join(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
 
   assert.match(envExample, /CURRENT_REAL_SMOKE/);
@@ -1269,15 +1270,8 @@ test('environment documentation and CI expose an explicit current real smoke gat
   assert.match(envExample, /gold:run review <batch_id> <attempt_id>/);
   assert.match(envExample, /gold:run decide <batch_id>/);
   assert.match(envExample, /trusted_gold_enabled=false/);
-  assert.match(ci, /smoke:current:real/);
-  assert.match(ci, /CURRENT_SMOKE_SCENARIO="\$scenario_id"/);
-  assert.match(ci, /CURRENT_REQUIRE_BROWSER_EVIDENCE=0/);
-  assert.doesNotMatch(ci, /PLAYWRIGHT_CAPTURE_ENABLED:\s*['"]?1/);
-  assert.match(ci, /if: github\.event_name != 'pull_request'/);
-  assert.match(ci, /steps\.secret_gate\.outputs\.enabled == 'true'/);
-  assert.match(ci, /pnpm db:migrate/);
-  assert.match(ci, /pnpm db:seed/);
-  assert.match(ci, /knowledge-base\/assets\/playbooks\/images\/jingxi-img-01\.png/);
-  for (const profile of realProfiles) assert.match(ci, new RegExp(profile));
-  for (const port of ['8801', '8802', '8805']) assert.match(ci, new RegExp(port));
+  assert.match(readme, /GitHub-hosted Quality 不运行内网 Gateway Smoke/);
+  assert.match(readme, /ALLOW_REAL_PROVIDER=1/);
+  assert.match(readme, /pnpm smoke:current:real/);
+  assert.doesNotMatch(ci, /ALLOW_REAL_PROVIDER|smoke:current:real|LLM_GATEWAY_API_KEY/);
 });
